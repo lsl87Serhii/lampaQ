@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v5) return;
-    window.marks_quality_merged_v5 = true;
+    if (window.marks_quality_merged_v6) return;
+    window.marks_quality_merged_v6 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -14,8 +14,8 @@
      * ------------------------------------------------------------------ */
 
     var LOG = false;
-    var DEFAULT_JACRED = 'jr.maxvol.pro';
-    var CACHE_KEY = 'marks_quality_cache_v5';
+    var DEFAULT_HOST = 'http://jackettua.mooo.com';
+    var CACHE_KEY = 'marks_quality_cache_v6';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
     var REQ_TIMEOUT = 6000;
@@ -34,7 +34,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  HELPERS & HOST DETECTION
+     *  HOST & API KEY DETECTION
      * ------------------------------------------------------------------ */
 
     function normalizeHost(raw) {
@@ -47,10 +47,10 @@
         return raw ? (proto + raw) : '';
     }
 
-    function normalizeSettingBoolean(val, defaultVal) {
+    function isSettingEnabled(key, defaultVal) {
+        var val = Lampa.Storage.get(key, defaultVal);
         if (val === undefined || val === null || val === '') return !!defaultVal;
         if (typeof val === 'boolean') return val;
-        if (typeof val === 'number') return val !== 0;
         if (typeof val === 'string') {
             var t = val.trim().toLowerCase();
             if (t === 'false' || t === '0' || t === 'off' || t === 'no' || t === 'disabled') return false;
@@ -59,25 +59,28 @@
         return !!val;
     }
 
-    function isSettingEnabled(key, defaultVal) {
-        return normalizeSettingBoolean(Lampa.Storage.get(key, defaultVal), defaultVal);
+    function getApiKey() {
+        var keys = ['jackett_key', 'parser_key', 'jacred_key'];
+        for (var i = 0; i < keys.length; i++) {
+            var k = Lampa.Storage.get(keys[i], '');
+            if (k && typeof k === 'string' && k.trim()) return k.trim();
+        }
+        return 'ua'; // За замовчуванням для LampaUA
     }
 
     function getActiveParserHosts() {
         var list = [];
 
-        // 1. Ручна адреса з налаштувань плагіна (якщо введено)
         var customSetting = String(Lampa.Storage.get('marks_jacred_url', 'auto') || 'auto').trim();
         if (customSetting && customSetting.toLowerCase() !== 'auto') {
             var manual = normalizeHost(customSetting);
             if (manual) list.push(manual);
         }
 
-        // 2. Зчитування ключів Lampa Storage
         var keys = [
+            'jackett_url',
             'lampaua_url',
             'spawnua_url',
-            'jackett_url',
             'jacred_url',
             'parser_torrent_url',
             'jackett_urltwo',
@@ -92,7 +95,6 @@
             }
         }
 
-        // 3. Зчитування з Lampa.Parser
         if (typeof Lampa.Parser !== 'undefined') {
             try {
                 var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
@@ -103,9 +105,8 @@
             } catch (e) {}
         }
 
-        // 4. Резервне джерело за замовчуванням
         if (!list.length) {
-            var fb = normalizeHost(DEFAULT_JACRED);
+            var fb = normalizeHost(DEFAULT_HOST);
             if (fb) list.push(fb);
         }
 
@@ -196,9 +197,20 @@
         return [];
     }
 
-    function isUaRelease(item) {
+    function isUaRelease(item, host) {
         if (!item) return false;
-        var fields = [item.trackerName, item.tracker, item.Tracker, item.url, item.Details];
+
+        // Якщо це сервер LampaUA / JackettUA, всі видані релізи є українськими
+        if (host && (host.indexOf('jackettua') >= 0 || host.indexOf('lampaua') >= 0 || host.indexOf('spawnua') >= 0)) {
+            return true;
+        }
+
+        var fields = [
+            item.trackerName, item.TrackerName,
+            item.tracker, item.Tracker,
+            item.url, item.Details, item.Comments
+        ];
+
         for (var i = 0; i < fields.length; i++) {
             var v = String(fields[i] || '').toLowerCase();
             if (!v) continue;
@@ -206,12 +218,13 @@
                 if (v.indexOf(UA_TRACKERS[j]) >= 0) return true;
             }
         }
-        var t = String(item.title || '').toLowerCase();
+
+        var t = String(item.title || item.Title || '').toLowerCase();
         return /(^|[\s\.\_\-\[\(\/])(ukr|ua|ukrainian|укр|українськ)([\s\.\_\-\]\)\/]|$)/i.test(t);
     }
 
     function detectResolution(item) {
-        var t = String(item && item.title || '').toLowerCase();
+        var t = String(item && (item.title || item.Title) || '').toLowerCase();
         var b = '(?:^|[^a-z0-9а-яіїєґ])';
         var e = '(?:[^a-z0-9а-яіїєґ]|$)';
 
@@ -221,7 +234,7 @@
         if (new RegExp(b + '(720[pi]?|hdrip|hdtv)' + e, 'i').test(t)) return 'HD';
         if (new RegExp(b + '(480[pi]?|360[pi]?|sd|dvdrip|vhsrip)' + e, 'i').test(t)) return 'SD';
 
-        var q = parseInt(item && item.quality, 10) || 0;
+        var q = parseInt(item && (item.quality || item.Quality), 10) || 0;
         if (q >= 2160) return '4K';
         if (q >= 1440) return '2K';
         if (q >= 1080) return 'FHD';
@@ -230,27 +243,28 @@
     }
 
     function releaseYear(item) {
-        var direct = parseInt(item && (item.relased || item.released || item.year), 10);
-        if (direct >= 1900) return direct;
-        var m = String(item && item.title || '').match(/(^|[^0-9])(19|20)(\d{2})([^0-9]|$)/);
+        var direct = parseInt(item && (item.relased || item.released || item.year || item.PublishDate), 10);
+        if (direct >= 1900 && direct <= 2030) return direct;
+        var t = String(item && (item.title || item.Title) || '');
+        var m = t.match(/(^|[^0-9])(19|20)(\d{2})([^0-9]|$)/);
         if (m) return parseInt(m[2] + m[3], 10);
         return 0;
     }
 
-    function analyzeTorrents(results, movie, wantYear) {
+    function analyzeTorrents(results, movie, wantYear, host) {
         var best = emptyMarksData();
         var bestRes = '';
         var found = false;
 
         results.forEach(function (item) {
-            if (!isUaRelease(item)) return;
+            if (!isUaRelease(item, host)) return;
 
             if (wantYear) {
                 var ry = releaseYear(item);
                 if (ry && Math.abs(ry - wantYear) > 1) return;
             }
 
-            var t = String(item && item.title || '').toLowerCase();
+            var t = String(item && (item.title || item.Title) || '').toLowerCase();
             if (/(^|[^a-zа-яіїєґ])(ts|telesync|camrip|cam|tc|screener)([^a-zа-яіїєґ]|$)/i.test(t)) return;
 
             found = true;
@@ -262,7 +276,7 @@
             if (RES_ORDER.indexOf(res) > RES_ORDER.indexOf(bestRes)) {
                 bestRes = res;
                 var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t);
-                var videoType = String(item && item.videotype || '').toLowerCase();
+                var videoType = String(item && (item.videotype || item.VideoType) || '').toLowerCase();
                 best.dolbyVision = isDv;
                 best.hdr = isDv || videoType === 'hdr' || /(^|[^a-z])hdr(10)?(\+)?([^a-z]|$)/i.test(t);
             }
@@ -279,11 +293,23 @@
      *  SEARCH PROCESSOR
      * ------------------------------------------------------------------ */
 
-    function buildJacredUrl(host, title, year, uid) {
-        var url = host + '/api/v1.0/torrents?search=' + encodeURIComponent(title);
-        if (year) url += '&year=' + encodeURIComponent(year);
-        if (uid) url += '&uid=' + encodeURIComponent(uid);
-        return url;
+    function buildUrls(host, title, year, apiKey) {
+        var encodedTitle = encodeURIComponent(title);
+        var list = [];
+
+        // 1. Jackett API (Основний ендпоінт для LampaUA / jackettua.mooo.com)
+        var jackettUrl = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encodedTitle;
+        list.push(jackettUrl);
+
+        // 2. JacRed API (Резервний ендпоінт)
+        var jacredUrl = host + '/api/v1.0/torrents?search=' + encodedTitle +
+                        (year ? '&year=' + encodeURIComponent(year) : '') +
+                        '&apikey=' + encodeURIComponent(apiKey) +
+                        '&key=' + encodeURIComponent(apiKey) +
+                        '&uid=' + encodeURIComponent(apiKey);
+        list.push(jacredUrl);
+
+        return list;
     }
 
     function jacredSearch(movie, callback) {
@@ -291,7 +317,7 @@
         var yearStr = String(dateRaw).substr(0, 4);
         var yearNum = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : 0;
 
-        var uid = Lampa.Storage.get('lampac_unic_id', '');
+        var apiKey = getApiKey();
         var titles = [];
         var loc = (movie.title || movie.name || '').trim();
         var orig = (movie.original_title || movie.original_name || '').trim();
@@ -308,8 +334,10 @@
 
         for (var h = 0; h < hosts.length; h++) {
             for (var t = 0; t < titles.length; t++) {
-                if (yearNum) tasks.push({ host: hosts[h], title: titles[t], year: yearStr });
-                tasks.push({ host: hosts[h], title: titles[t], year: '' });
+                var urls = buildUrls(hosts[h], titles[t], yearNum ? yearStr : '', apiKey);
+                for (var u = 0; u < urls.length; u++) {
+                    tasks.push({ host: hosts[h], url: urls[u] });
+                }
             }
         }
 
@@ -317,17 +345,15 @@
             if (index >= tasks.length) return callback(emptyMarksData());
 
             var task = tasks[index];
-            var url = buildJacredUrl(task.host, task.title, task.year, uid);
+            log('request', movie.id, task.url);
 
-            log('request', movie.id, url);
-
-            fetchUrl(url, function (err, body) {
+            fetchUrl(task.url, function (err, body) {
                 if (err || !body) return runTask(index + 1);
 
                 var results = parseTorrents(body);
                 if (!results.length) return runTask(index + 1);
 
-                var data = analyzeTorrents(results, movie, yearNum);
+                var data = analyzeTorrents(results, movie, yearNum, task.host);
                 if (data && !data.empty) return callback(data);
 
                 runTask(index + 1);
@@ -597,7 +623,7 @@
         Lampa.SettingsApi.addParam({
             component: component,
             param: { name: 'marks_cache_clear', type: 'button' },
-            field: { name: 'Очистити кеш міток', description: 'Скинути сохранені дані про якість' },
+            field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' },
             onChange: function () {
                 clearCache();
                 if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено');
@@ -640,10 +666,10 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v5')) return;
+        if (document.getElementById('likhtar-marks-style-v6')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v5';
+        style.id = 'likhtar-marks-style-v6';
         style.innerHTML = '\
             .likhtar-marks-container {\
                 position: absolute;\
