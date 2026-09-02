@@ -1,42 +1,22 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v15) return;
-    window.marks_quality_merged_v15 = true;
-
-    if (typeof Lampa === 'undefined') {
-        console.warn('Marks+Quality: Lampa not found');
-        return;
-    }
-
-    window.MARKS_QUALITY_VERSION = 15;
-
-    /* ------------------------------------------------------------------ *
-     *  CONFIG & CACHE
-     * ------------------------------------------------------------------ */
+    if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v15';
-    var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
-    var CACHE_LIMIT = 800;
-    var REQ_TIMEOUT = 15000;                           // Таймаут 15 сек під SpawnUA
+    var CACHE_KEY = 'marks_quality_cache_v16';
+    var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
+    var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
-
-    var UA_TRACKERS = ['toloka', 'toloka.to', 'mazepa', 'hurtom', 'uafilm', 'baibako', 'ua-tracker', 'mova'];
 
     var memCache = {};
     var pending = {};
     var queue = [];
     var active = 0;
 
-    function log() {
-        if (LOG) console.log.apply(console, ['MARKS+Q'].concat([].slice.call(arguments)));
-    }
-
     /* ------------------------------------------------------------------ *
-     *  HELPERS & PARSER CONFIG DETECTION
+     *  HOST & API KEY RESOLUTION
      * ------------------------------------------------------------------ */
 
     function normalizeHost(raw) {
@@ -49,84 +29,53 @@
         return raw ? (proto + raw) : '';
     }
 
-    function cleanTitle(raw) {
-        return String(raw || '')
-            .replace(/[!\?\:\–\—\.\,\_\/]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
+    function getJackettHost() {
+        var custom = Lampa.Storage.get('marks_jacred_url', 'auto');
+        if (custom && custom !== 'auto') return normalizeHost(custom);
 
-    function normalizeSettingBoolean(val, defaultVal) {
-        if (val === undefined || val === null || val === '') return !!defaultVal;
-        if (typeof val === 'boolean') return val;
-        if (typeof val === 'number') return val !== 0;
-        if (typeof val === 'string') {
-            var t = val.trim().toLowerCase();
-            if (t === 'false' || t === '0' || t === 'off' || t === 'no' || t === 'disabled') return false;
-            if (t === 'true' || t === '1' || t === 'on' || t === 'yes' || t === 'enabled') return true;
-        }
-        return !!val;
-    }
-
-    function isSettingEnabled(key, defaultVal) {
-        return normalizeSettingBoolean(Lampa.Storage.get(key, defaultVal), defaultVal);
-    }
-
-    function getParserConfig() {
-        var hosts = [];
-        var key = 'ua';
-
-        var customSetting = String(Lampa.Storage.get('marks_jacred_url', 'auto') || 'auto').trim();
-        if (customSetting && customSetting.toLowerCase() !== 'auto') {
-            var manual = normalizeHost(customSetting);
-            if (manual) hosts.push(manual);
-        }
-
-        var urlKeys = [
-            'jackett_url',
-            'spawnua_url',
-            'lampaua_url',
-            'parser_torrent_url',
-            'jacred_url',
-            'jackett_urltwo',
-            'parser_url'
-        ];
-
-        for (var i = 0; i < urlKeys.length; i++) {
-            var v = Lampa.Storage.get(urlKeys[i], '');
-            if (v && typeof v === 'string' && v.trim()) {
-                var host = normalizeHost(v);
-                if (host && hosts.indexOf(host) === -1) hosts.push(host);
+        var keys = ['jackett_url', 'spawnua_url', 'lampaua_url', 'parser_torrent_url', 'jacred_url', 'parser_url'];
+        for (var i = 0; i < keys.length; i++) {
+            var val = Lampa.Storage.get(keys[i], '');
+            if (val) {
+                var h = normalizeHost(val);
+                if (h) return h;
             }
         }
-
-        if (typeof Lampa !== 'undefined' && Lampa.Parser) {
+        if (Lampa.Parser) {
             try {
                 var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
-                if (pUrl) {
-                    var normP = normalizeHost(pUrl);
-                    if (normP && hosts.indexOf(normP) === -1) hosts.push(normP);
-                }
+                if (pUrl) return normalizeHost(pUrl);
             } catch (e) {}
         }
+        return 'http://jackettua.mooo.com';
+    }
 
-        var keyKeys = ['jackett_key', 'spawnua_key', 'parser_key', 'jacred_key'];
-        for (var j = 0; j < keyKeys.length; j++) {
-            var k = Lampa.Storage.get(keyKeys[j], '');
-            if (k && typeof k === 'string' && k.trim()) {
-                key = k.trim();
-                break;
+    function getJackettKey() {
+        var keys = ['jackett_key', 'spawnua_key', 'parser_key', 'jacred_key'];
+        for (var i = 0; i < keys.length; i++) {
+            var val = Lampa.Storage.get(keys[i], '');
+            if (val !== undefined && val !== null && String(val).trim() !== '') {
+                return String(val).trim();
             }
         }
-
-        if (!hosts.length) hosts.push(normalizeHost(DEFAULT_HOST));
-
-        return { hosts: hosts, key: key };
+        return 'ua';
     }
 
     /* ------------------------------------------------------------------ *
-     *  CACHE MANAGEMENT
+     *  SETTINGS & CACHE
      * ------------------------------------------------------------------ */
+
+    function isSettingEnabled(key, defaultVal) {
+        var val = Lampa.Storage.get(key, defaultVal);
+        if (val === undefined || val === null || val === '') return !!defaultVal;
+        if (typeof val === 'boolean') return val;
+        if (typeof val === 'string') {
+            var t = val.trim().toLowerCase();
+            if (t === 'false' || t === '0' || t === 'off' || t === 'no') return false;
+            if (t === 'true' || t === '1' || t === 'on' || t === 'yes') return true;
+        }
+        return !!val;
+    }
 
     function readStore() {
         var c = Lampa.Storage.get(CACHE_KEY, {});
@@ -149,31 +98,29 @@
         try {
             var store = readStore();
             store[key] = data;
-            var keys = Object.keys(store);
-            if (keys.length > CACHE_LIMIT) {
-                keys.sort(function (a, b) { return (store[a]._ts || 0) - (store[b]._ts || 0); });
-                for (var i = 0; i < keys.length - CACHE_LIMIT; i++) delete store[keys[i]];
-            }
             Lampa.Storage.set(CACHE_KEY, store);
-        } catch (e) { }
+        } catch (e) {}
     }
 
     function clearCache() {
         memCache = {};
-        try { Lampa.Storage.set(CACHE_KEY, {}); } catch (e) { }
+        try { Lampa.Storage.set(CACHE_KEY, {}); } catch (e) {}
     }
 
     /* ------------------------------------------------------------------ *
      *  NETWORK REQUESTS
      * ------------------------------------------------------------------ */
 
-    function fetchUrl(url, callback) {
+    function fetchJackett(query, callback) {
+        var host = getJackettHost();
+        var key = getJackettKey();
+        var url = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(key) + '&Query=' + encodeURIComponent(query);
+
         try {
-            var network = new Lampa.Reguest();
-            network.timeout(REQ_TIMEOUT);
-            network.silent(url, function (res) {
-                if (res) callback(null, res);
-                else callback(new Error('Empty response'));
+            var req = new Lampa.Reguest();
+            req.timeout(REQ_TIMEOUT);
+            req.silent(url, function (res) {
+                callback(null, res);
             }, function (err) {
                 callback(err || new Error('Request failed'));
             });
@@ -183,68 +130,35 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  TORRENT PARSING & RESOLUTION DETECTOR
+     *  TORRENT PARSING & QUALITY MATCHING
      * ------------------------------------------------------------------ */
 
-    function emptyMarksData() {
-        return { empty: true, resolution: '', ukr: false, eng: false, hdr: false, dolbyVision: false };
-    }
-
-    function getCardType(card) {
-        var type = card.media_type || card.type;
-        if (type === 'movie' || type === 'tv') return type;
-        return (card.name || card.original_name) ? 'tv' : 'movie';
-    }
-
-    function parseTorrents(body) {
-        if (!body) return [];
-        if (Array.isArray(body)) return body;
-
-        var parsed = null;
-        if (typeof body === 'string') {
-            try { parsed = JSON.parse(body); } catch (e) { return []; }
-        } else {
-            parsed = body;
+    function parseResults(res) {
+        if (!res) return [];
+        if (typeof res === 'string') {
+            try { res = JSON.parse(res); } catch (e) { return []; }
         }
-
-        if (!parsed) return [];
-        if (Array.isArray(parsed)) return parsed;
-        if (parsed.contents) return parseTorrents(parsed.contents);
-        if (Array.isArray(parsed.Results)) return parsed.Results;
-        if (Array.isArray(parsed.results)) return parsed.results;
-        if (Array.isArray(parsed.items)) return parsed.items;
-        if (Array.isArray(parsed.torrents)) return parsed.torrents;
-        if (Array.isArray(parsed.data)) return parsed.data;
-
+        if (Array.isArray(res)) return res;
+        if (res.Results && Array.isArray(res.Results)) return res.Results;
+        if (res.results && Array.isArray(res.results)) return res.results;
+        if (res.items && Array.isArray(res.items)) return res.items;
+        if (res.torrents && Array.isArray(res.torrents)) return res.torrents;
         return [];
     }
 
-    function detectResolution(item) {
-        if (!item) return 'FHD';
-
-        var qStr = String(item.quality || item.Quality || item.resolution || item.Resolution || '').toLowerCase();
-        var qNum = parseInt(qStr, 10) || 0;
-
-        var title = String(item.title || item.Title || item.name || item.Name || '').toLowerCase();
-        var desc = String(item.description || item.Description || item.details || '').toLowerCase();
-        var fullText = title + ' ' + desc + ' ' + qStr;
-
-        if (qNum >= 2160 || /(2160|4k|uhd|ultra\s*hd)/i.test(fullText)) return '4K';
-        if (qNum === 1440 || /(1440|2k|qhd)/i.test(fullText)) return '2K';
-        if (qNum === 1080 || /(1080|fhd|full\s*hd)/i.test(fullText)) return 'FHD';
-        if (qNum === 720 || /(720|hdrip|hdtv)/i.test(fullText)) return 'HD';
-        if ((qNum > 0 && qNum <= 576) || /(480|576|sd|dvdrip|vhsrip)/i.test(fullText)) return 'SD';
-
+    function detectResolution(title) {
+        var t = String(title || '').toLowerCase();
+        if (/(2160|4k|uhd|ultra\s*hd)/i.test(t)) return '4K';
+        if (/(1440|2k|qhd)/i.test(t)) return '2K';
+        if (/(1080|fhd|full\s*hd)/i.test(t)) return 'FHD';
+        if (/(720|hdrip|hdtv)/i.test(t)) return 'HD';
+        if (/(480|576|sd|dvdrip)/i.test(t)) return 'SD';
         return 'FHD';
     }
 
-    function extractTorrentYears(item) {
+    function extractTorrentYears(title) {
         var years = [];
-        var direct = parseInt(item && (item.relased || item.released || item.year), 10);
-        if (direct >= 1900 && direct <= 2030) years.push(direct);
-
-        var t = String(item && (item.title || item.Title) || '');
-        var matches = t.match(/(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)/g);
+        var matches = String(title || '').match(/(?:^|[^0-9])(19\d{2}|20\d{2})(?:[^0-9]|$)/g);
         if (matches) {
             matches.forEach(function (m) {
                 var y = parseInt(m.replace(/[^0-9]/g, ''), 10);
@@ -254,176 +168,120 @@
         return years;
     }
 
-    function analyzeTorrents(results, movie, wantYear) {
-        var best = emptyMarksData();
+    function analyzeTorrents(items, wantYear) {
+        var best = { empty: true, resolution: '', ukr: true, eng: false, hdr: false, dolbyVision: false };
         var bestResIndex = -1;
         var found = false;
 
-        results.forEach(function (item) {
-            if (!item) return;
+        items.forEach(function (item) {
+            var title = String(item.Title || item.title || item.name || '');
+            if (!title) return;
 
             if (wantYear) {
-                var tYears = extractTorrentYears(item);
+                var tYears = extractTorrentYears(title);
                 if (tYears.length > 0) {
-                    var matchesYear = tYears.some(function (y) {
-                        return Math.abs(y - wantYear) <= 1;
-                    });
-                    if (!matchesYear) return;
+                    var match = tYears.some(function (y) { return Math.abs(y - wantYear) <= 1; });
+                    if (!match) return;
                 }
             }
 
-            var t = String(item.title || item.Title || item.name || '').toLowerCase();
-            if (/(^|[^a-zа-яіїєґ])(ts|telesync|camrip|cam|tc|screener)([^a-zа-яіїєґ]|$)/i.test(t)) return;
+            var tLower = title.toLowerCase();
+            if (/(camrip|telesync|\bts\b|\bcam\b|screener)/i.test(tLower)) return;
 
             found = true;
-            if (/(eng|english|multi)/i.test(t)) best.eng = true;
+            if (/(eng|english|multi)/i.test(tLower)) best.eng = true;
 
-            var res = detectResolution(item);
-            var resIndex = RES_ORDER.indexOf(res);
-
-            if (resIndex >= bestResIndex) {
-                bestResIndex = resIndex;
+            var res = detectResolution(title);
+            var resIdx = RES_ORDER.indexOf(res);
+            if (resIdx >= bestResIndex) {
+                bestResIndex = resIdx;
                 best.resolution = res;
 
-                var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t);
-                var videoType = String(item.videotype || item.VideoType || '').toLowerCase();
-
-                if (isDv) {
+                if (tLower.indexOf('dolby vision') >= 0 || tLower.indexOf('dovi') >= 0) {
                     best.dolbyVision = true;
                     best.hdr = true;
-                } else if (videoType === 'hdr' || /(hdr10\+|hdr10|hdr)/i.test(t)) {
+                } else if (/(hdr10\+|hdr10|hdr)/i.test(tLower)) {
                     best.hdr = true;
                 }
             }
         });
 
-        if (!found) return emptyMarksData();
-
-        best.ukr = true;
+        if (!found) return { empty: true };
         best.empty = false;
         return best;
     }
 
     /* ------------------------------------------------------------------ *
-     *  SEARCH PROCESSOR
+     *  SEARCH FLOW
      * ------------------------------------------------------------------ */
 
-    function buildUrls(host, title, apiKey) {
-        var encoded = encodeURIComponent(title);
-        var list = [];
-        list.push(host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encoded);
-        list.push(host + '/api/v2.0/indexers/all/results/torznab/api?apikey=' + encodeURIComponent(apiKey) + '&t=search&q=' + encoded);
-        return list;
-    }
-
-    function fallbackSearch(movie, yearNum, callback) {
-        var config = getParserConfig();
-        var apiKey = config.key;
-        var hosts = config.hosts;
-
-        var titles = [];
-        var loc = cleanTitle(movie.title || movie.name);
-        var orig = cleanTitle(movie.original_title || movie.original_name);
-
-        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
-        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
-
-        if (!titles.length || !hosts.length) return callback(emptyMarksData());
-
-        var tasks = [];
-        for (var h = 0; h < hosts.length; h++) {
-            for (var t = 0; t < titles.length; t++) {
-                var urls = buildUrls(hosts[h], titles[t], apiKey);
-                for (var u = 0; u < urls.length; u++) {
-                    tasks.push({ host: hosts[h], url: urls[u] });
-                }
-            }
-        }
-
-        function runTask(index) {
-            if (index >= tasks.length) return callback(emptyMarksData());
-
-            var task = tasks[index];
-            log('request', movie.id, task.url);
-
-            fetchUrl(task.url, function (err, body) {
-                if (err || !body) return runTask(index + 1);
-
-                var results = parseTorrents(body);
-                if (!results.length) return runTask(index + 1);
-
-                var data = analyzeTorrents(results, movie, yearNum);
-                if (data && !data.empty) return callback(data);
-
-                runTask(index + 1);
-            });
-        }
-
-        runTask(0);
-    }
-
-    function searchTorrentsForMovie(movie, callback) {
+    function searchMovie(movie, callback) {
         var dateRaw = movie.release_date || movie.first_air_date || movie.year || '';
         var yearStr = String(dateRaw).substr(0, 4);
         var yearNum = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : 0;
 
-        if (typeof Lampa !== 'undefined' && Lampa.Jackett && typeof Lampa.Jackett.search === 'function') {
-            try {
-                Lampa.Jackett.search(movie, function (res) {
-                    var items = parseTorrents(res);
-                    if (items && items.length) {
-                        var data = analyzeTorrents(items, movie, yearNum);
-                        if (data && !data.empty) return callback(data);
-                    }
-                    fallbackSearch(movie, yearNum, callback);
-                }, function () {
-                    fallbackSearch(movie, yearNum, callback);
-                });
-                return;
-            } catch (e) { }
+        var locTitle = String(movie.title || movie.name || '').replace(/[!\?\:\–\—\.\,\_\/]/g, ' ').trim();
+        var origTitle = String(movie.original_title || movie.original_name || '').replace(/[!\?\:\–\—\.\,\_\/]/g, ' ').trim();
+
+        var queries = [];
+        if (locTitle) queries.push(locTitle);
+        if (origTitle && origTitle !== locTitle) queries.push(origTitle);
+
+        if (!queries.length) return callback({ empty: true });
+
+        function tryQuery(index) {
+            if (index >= queries.length) return callback({ empty: true });
+
+            fetchJackett(queries[index], function (err, res) {
+                if (err || !res) return tryQuery(index + 1);
+
+                var items = parseResults(res);
+                if (!items.length) return tryQuery(index + 1);
+
+                var data = analyzeTorrents(items, yearNum);
+                if (data && !data.empty) return callback(data);
+
+                tryQuery(index + 1);
+            });
         }
 
-        fallbackSearch(movie, yearNum, callback);
+        tryQuery(0);
     }
 
     /* ------------------------------------------------------------------ *
-     *  QUEUE & RENDERING
+     *  QUEUE & CARD PROCESSING
      * ------------------------------------------------------------------ */
 
     function pump() {
-        while (active < MAX_PARALLEL && queue.length) run(queue.shift());
+        while (active < MAX_PARALLEL && queue.length) runTask(queue.shift());
     }
 
-    function run(task) {
+    function runTask(task) {
         active++;
-        var finished = false;
-
-        function finish(data) {
-            if (finished) return;
-            finished = true;
-            var result = data || emptyMarksData();
-            setCache(task.key, result);
+        searchMovie(task.movie, function (data) {
+            setCache(task.key, data);
             var cbs = pending[task.key] || [];
             delete pending[task.key];
             for (var i = 0; i < cbs.length; i++) {
-                try { cbs[i](result); } catch (e) { }
+                try { cbs[i](data); } catch (e) {}
             }
             active--;
             pump();
-        }
-
-        searchTorrentsForMovie(task.movie, finish);
+        });
     }
 
     function resolveMarks(movie, callback) {
-        if (!movie || (!movie.id && !movie.kp_id && !movie.imdb_id)) return callback(emptyMarksData());
-
         var id = movie.id || movie.kp_id || movie.imdb_id;
-        var key = getCardType(movie) + '_' + id;
+        var type = (movie.media_type || movie.type || ((movie.name || movie.original_name) ? 'tv' : 'movie'));
+        var key = type + '_' + id;
+
         var cached = getCache(key);
         if (cached) return callback(cached);
 
-        if (pending[key]) return pending[key].push(callback);
+        if (pending[key]) {
+            pending[key].push(callback);
+            return;
+        }
 
         pending[key] = [callback];
         queue.push({ key: key, movie: movie });
@@ -443,265 +301,95 @@
                null;
     }
 
-    function extractRating(movie) {
-        if (!movie) return 0;
-        var candidates = [movie.imdb_rating, movie.kp_rating, movie.vote_average, movie.rating, movie.rate];
-        for (var i = 0; i < candidates.length; i++) {
-            if (candidates[i] === undefined || candidates[i] === null || candidates[i] === '') continue;
-            var n = parseFloat(String(candidates[i]).replace(',', '.'));
-            if (!isNaN(n) && n > 0) return n;
-        }
-        return 0;
-    }
-
-    function extractYear(movie) {
-        if (!movie) return '';
-        var raw = movie.release_date || movie.first_air_date || movie.year || '';
-        var year = String(raw).substr(0, 4);
-        return /^\d{4}$/.test(year) ? year : '';
-    }
-
-    function createCardBadge(cssClass, label) {
+    function createBadge(cssClass, label) {
         var badge = document.createElement('div');
-        badge.classList.add('likhtar-marks-badge');
-        badge.classList.add('likhtar-marks-badge--' + cssClass);
+        badge.className = 'likhtar-marks-badge likhtar-marks-badge--' + cssClass;
         badge.textContent = label;
         return badge;
     }
 
-    function renderCardBadges(container, data, movie, cardRoot) {
+    function renderBadges(container, data, movie, $card) {
         container.empty();
+        $card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
 
-        if (cardRoot && cardRoot.length) {
-            cardRoot.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
-        }
+        if (!isSettingEnabled('marks_enabled', true) || data.empty) return;
 
-        if (!isSettingEnabled('marks_enabled', true)) {
-            if (cardRoot && cardRoot.length) cardRoot.removeClass('likhtar-marks-active likhtar-marks-has-custom-rating');
-            return;
-        }
-
-        // ЯКЩО ТОРЕНТІВ НЕ ЗНАЙДЕНО — ПОСТЕР ЗАЛИШАЄТЬСЯ ЧИСТИМ
-        if (data.empty) {
-            if (cardRoot && cardRoot.length) cardRoot.removeClass('likhtar-marks-active likhtar-marks-has-custom-rating');
-            return;
-        }
-
-        if (data.ukr && isSettingEnabled('marks_ua', true)) container.append(createCardBadge('ua', 'UA'));
-        if (data.eng && isSettingEnabled('marks_en', true)) container.append(createCardBadge('en', 'EN'));
+        if (data.ukr && isSettingEnabled('marks_ua', true)) container.append(createBadge('ua', 'UA'));
+        if (data.eng && isSettingEnabled('marks_en', true)) container.append(createBadge('en', 'EN'));
 
         if (data.resolution) {
             if (data.resolution === '4K' && isSettingEnabled('marks_4k', true)) {
-                container.append(createCardBadge('4k', '4K'));
+                container.append(createBadge('4k', '4K'));
             } else if (data.resolution === '2K' && isSettingEnabled('marks_fhd', true)) {
-                container.append(createCardBadge('fhd', '2K'));
+                container.append(createBadge('fhd', '2K'));
             } else if (data.resolution === 'FHD' && isSettingEnabled('marks_fhd', true)) {
-                container.append(createCardBadge('fhd', '1080p'));
+                container.append(createBadge('fhd', '1080p'));
             } else if (data.resolution === 'HD' && isSettingEnabled('marks_fhd', true)) {
-                container.append(createCardBadge('hd', '720p'));
-            } else if (isSettingEnabled('marks_fhd', true)) {
-                container.append(createCardBadge('hd', data.resolution));
+                container.append(createBadge('hd', '720p'));
             }
         }
 
         if (data.hdr && isSettingEnabled('marks_hdr', true)) {
-            container.append(createCardBadge('hdr', data.dolbyVision ? 'DV' : 'HDR'));
+            container.append(createBadge('hdr', data.dolbyVision ? 'DV' : 'HDR'));
         }
 
-        var hasCustomRating = false;
         if (isSettingEnabled('marks_rating', true)) {
-            var rating = extractRating(movie);
-            if (rating > 0 && String(rating) !== '0.0') {
+            var rating = parseFloat(movie.imdb_rating || movie.vote_average || movie.rating || 0);
+            if (rating > 0) {
                 var rBadge = document.createElement('div');
-                rBadge.classList.add('likhtar-marks-badge', 'likhtar-marks-badge--rating');
+                rBadge.className = 'likhtar-marks-badge likhtar-marks-badge--rating';
                 rBadge.innerHTML = '<span class="likhtar-marks-star">&#9733;</span>' + rating.toFixed(1);
                 container.append(rBadge);
-                hasCustomRating = true;
             }
         }
 
         if (isSettingEnabled('marks_year', true)) {
-            var year = extractYear(movie);
-            if (year) container.append(createCardBadge('year', year));
-        }
-
-        if (cardRoot && cardRoot.length) {
-            if (hasCustomRating) cardRoot.addClass('likhtar-marks-has-custom-rating');
-            else cardRoot.removeClass('likhtar-marks-has-custom-rating');
-
-            if (container.children().length) cardRoot.addClass('likhtar-marks-active');
-            else cardRoot.removeClass('likhtar-marks-active');
-        }
-    }
-
-    function addMarksToCard(card, movie, viewSelector) {
-        if (!isSettingEnabled('marks_enabled', true)) return;
-
-        card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
-
-        var containerParent = viewSelector ? card.find(viewSelector).first() : card;
-        if (!containerParent.length) containerParent = card;
-        if (containerParent.css('position') === 'static') containerParent.css('position', 'relative');
-
-        var marksContainer = containerParent.find('.likhtar-marks-container').first();
-        if (!marksContainer.length) {
-            marksContainer = $('<div class="likhtar-marks-container"></div>');
-            containerParent.append(marksContainer);
-        }
-
-        resolveMarks(movie, function (bestData) {
-            if (!document.body.contains(card[0])) return;
-            renderCardBadges(marksContainer, bestData, movie, card);
-        });
-    }
-
-    function processCards(scopeNodes) {
-        if (!isSettingEnabled('marks_enabled', true)) return;
-
-        var cardsToProcess;
-        if (scopeNodes && scopeNodes.length) {
-            var cardNodes = [];
-            for (var i = 0; i < scopeNodes.length; i++) {
-                var node = scopeNodes[i];
-                if (!node || node.nodeType !== 1) continue;
-                if (node.matches && node.matches('.card')) cardNodes.push(node);
-                var nested = node.querySelectorAll ? node.querySelectorAll('.card') : [];
-                for (var j = 0; j < nested.length; j++) cardNodes.push(nested[j]);
+            var rawYear = movie.release_date || movie.first_air_date || movie.year || '';
+            var yearStr = String(rawYear).substr(0, 4);
+            if (/^\d{4}$/.test(yearStr)) {
+                container.append(createBadge('year', yearStr));
             }
-            cardsToProcess = $(cardNodes).not('.likhtar-marks-processed');
-        } else {
-            cardsToProcess = $('.card').not('.likhtar-marks-processed');
         }
+    }
 
-        cardsToProcess.each(function () {
-            var card = $(this);
+    function processCards() {
+        if (!isSettingEnabled('marks_enabled', true)) return;
 
-            card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
+        $('.card').each(function () {
+            var $card = $(this);
+            $card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
+
+            if ($card.hasClass('likhtar-marks-processed')) return;
 
             var movie = getMovieFromCard(this);
             if (!movie || (!movie.id && !movie.kp_id && !movie.imdb_id)) return;
 
-            card.addClass('likhtar-marks-processed');
-            if (card.hasClass('hero-banner')) addMarksToCard(card, movie, null);
-            else addMarksToCard(card, movie, '.card__view');
+            $card.addClass('likhtar-marks-processed');
+
+            var containerParent = $card.hasClass('hero-banner') ? $card : ($card.find('.card__view').first().length ? $card.find('.card__view').first() : $card);
+            if (containerParent.css('position') === 'static') containerParent.css('position', 'relative');
+
+            var marksContainer = containerParent.find('.likhtar-marks-container').first();
+            if (!marksContainer.length) {
+                marksContainer = $('<div class="likhtar-marks-container"></div>');
+                containerParent.append(marksContainer);
+            }
+
+            resolveMarks(movie, function (data) {
+                if (!document.body.contains($card[0])) return;
+                renderBadges(marksContainer, data, movie, $card);
+            });
         });
-    }
-
-    function refreshAllMarks() {
-        try {
-            $('.likhtar-marks-container, .likhtar-marks-full, .likhtar-marks-row').remove();
-            $('.card').removeClass('likhtar-marks-processed likhtar-marks-active likhtar-marks-has-custom-rating');
-        } catch (e) { }
-
-        if (!isSettingEnabled('marks_enabled', true)) return;
-        try { processCards(); } catch (e2) { }
     }
 
     /* ------------------------------------------------------------------ *
-     *  SETTINGS & STYLES
+     *  STYLES & SETUP
      * ------------------------------------------------------------------ */
 
-    function setupSettings() {
-        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
-        if (window.marks_quality_settings_added) return;
-        window.marks_quality_settings_added = true;
-
-        var component = 'interface';
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { type: 'title' },
-            field: { name: 'Мітки якості (Marks)' }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_enabled', type: 'trigger', default: true },
-            field: { name: 'Увімкнути модуль міток' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_ua', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку UA' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_4k', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку 4K' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_fhd', type: 'trigger', default: true },
-            field: { name: 'Показувати мітки 1080p / 720p' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_rating', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку рейтингу' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: {
-                name: 'marks_jacred_url',
-                type: 'input',
-                values: '',
-                placeholder: 'auto',
-                default: 'auto'
-            },
-            field: {
-                name: 'Джерело якості',
-                description: '«auto» — читати адрес з налаштувань парсера Lampa, або введіть адрес вручну'
-            },
-            onChange: function () { clearCache(); refreshAllMarks(); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_cache_clear', type: 'button' },
-            field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' },
-            onChange: function () {
-                clearCache();
-                if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено');
-                refreshAllMarks();
-            }
-        });
-    }
-
-    function initCardObserver() {
-        var queued = false;
-
-        function scheduleProcess() {
-            if (queued) return;
-            queued = true;
-            setTimeout(function () {
-                queued = false;
-                processCards();
-            }, 100);
-        }
-
-        var observer = new MutationObserver(scheduleProcess);
-        var target = document.getElementById('app') || document.body;
-        observer.observe(target, { childList: true, subtree: true });
-
-        processCards();
-        setInterval(processCards, 800);
-    }
-
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v15')) return;
-
+        if (document.getElementById('likhtar-marks-style-v16')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v15';
+        style.id = 'likhtar-marks-style-v16';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -747,32 +435,41 @@
             .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; }\
             .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); }\
             .likhtar-marks-star { margin-right: 0.15em; }\
-            .card.likhtar-marks-active .card__type,\
-            .card.likhtar-marks-active .card__quality { display: none !important; }\
         ';
-
         (document.head || document.documentElement).appendChild(style);
     }
 
-    /* ------------------------------------------------------------------ *
-     *  INIT
-     * ------------------------------------------------------------------ */
+    function setupSettings() {
+        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
+        if (window.marks_quality_settings_added) return;
+        window.marks_quality_settings_added = true;
+
+        var component = 'interface';
+        Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' }, field: { name: 'Мітки якості (Marks)' } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_enabled', type: 'trigger', default: true }, field: { name: 'Увімкнути модуль міток' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_ua', type: 'trigger', default: true }, field: { name: 'Показувати мітку UA' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_4k', type: 'trigger', default: true }, field: { name: 'Показувати мітку 4K' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_fhd', type: 'trigger', default: true }, field: { name: 'Показувати мітки 1080p / 720p' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_rating', type: 'trigger', default: true }, field: { name: 'Показувати мітку рейтингу' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_cache_clear', type: 'button' }, field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' }, onChange: function () { clearCache(); if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено'); refreshAllMarks(); } });
+    }
+
+    function refreshAllMarks() {
+        $('.likhtar-marks-container').remove();
+        $('.card').removeClass('likhtar-marks-processed');
+        processCards();
+    }
 
     function runInit() {
         setupSettings();
         clearCache();
         injectStyle();
-        initCardObserver();
         processCards();
+        setInterval(processCards, 1000);
 
-        if (Lampa.Listener && Lampa.Listener.follow) {
-            Lampa.Listener.follow('activity', function (e) {
-                if (e.type === 'render' || e.type === 'build') {
-                    setTimeout(processCards, 150);
-                    setTimeout(processCards, 500);
-                }
-            });
-        }
+        var observer = new MutationObserver(function () { processCards(); });
+        var target = document.getElementById('app') || document.body;
+        if (target) observer.observe(target, { childList: true, subtree: true });
     }
 
     if (window.appready) runInit();
