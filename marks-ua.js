@@ -340,10 +340,18 @@
         return '';
     }
 
-    // Широкий запит повертає музику, софт і 3D-моделі з тією ж назвою
-    function isJunkRelease(title) {
+    // Широкий запит повертає музику, софт і 3D-моделі з тією ж назвою.
+    // ВАЖЛИВО: flac/lossless трапляються в аудіодоріжках 4K-ремуксів,
+    // тому сміттям вважаємо лише те, де НЕМАЄ жодної відеоознаки.
+    function hasVideoMarkers(title) {
         var t = String(title || '').toLowerCase();
-        return /(flac|lossless|\bmp3\b|kbps|\bogg\b|\baac~|discography|soundtrack|\bost\b|\[ep\]|vsti|\bvst\b|\baax\b|\.stl\b|3d print|x64\)|\[en\]$)/.test(t);
+        return /(2160|1440|1080|720|480|576|\buhd\b|\b4k\b|web-?dl|web-?rip|bd-?rip|bd-?remux|blu-?ray|hdtv|hdrip|dvdrip|\bavc\b|\bhevc\b|x26[45]|h\.?26[45]|remux)/.test(t);
+    }
+
+    function isJunkRelease(title) {
+        if (hasVideoMarkers(title)) return false;
+        var t = String(title || '').toLowerCase();
+        return /(flac|lossless|\bmp3\b|kbps|\bogg\b|discography|soundtrack|\bost\b|\[ep\]|vsti|\bvst\b|\baax\b|\.stl\b|3d print)/.test(t);
     }
 
     function isCamRelease(title) {
