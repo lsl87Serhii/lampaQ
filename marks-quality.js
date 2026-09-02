@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v10) return;
-    window.marks_quality_merged_v10 = true;
+    if (window.marks_quality_merged_v11) return;
+    window.marks_quality_merged_v11 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -15,10 +15,10 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v10';
+    var CACHE_KEY = 'marks_quality_cache_v11';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
-    var REQ_TIMEOUT = 6000;
+    var REQ_TIMEOUT = 15000;                           // Збільшено до 15 сек для SpawnUA
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
@@ -45,13 +45,6 @@
                  .replace(/\/api\/.*$/i, '')
                  .replace(/\/+$/, '');
         return raw ? (proto + raw) : '';
-    }
-
-    function cleanTitle(raw) {
-        return String(raw || '')
-            .replace(/[:\-\–\—\.\,\_\/]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
     }
 
     function normalizeSettingBoolean(val, defaultVal) {
@@ -184,7 +177,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  TORRENT PARSING & STRICT LOCAL YEAR MATCHING
+     *  TORRENT PARSING & MATCHING
      * ------------------------------------------------------------------ */
 
     function emptyMarksData() {
@@ -278,14 +271,13 @@
         results.forEach(function (item) {
             if (!isUaRelease(item, host)) return;
 
-            // Локальна перевірка року виходу торента
             if (wantYear) {
                 var tYears = extractTorrentYears(item);
                 if (tYears.length > 0) {
                     var matchesYear = tYears.some(function (y) {
                         return Math.abs(y - wantYear) <= 1;
                     });
-                    if (!matchesYear) return; // Пропускаємо торент, якщо рік не збігається з карткою
+                    if (!matchesYear) return;
                 }
             }
 
@@ -322,16 +314,8 @@
         var encodedTitle = encodeURIComponent(title);
         var list = [];
 
-        // Jackett API endpoint
         var jackettUrl = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encodedTitle;
         list.push(jackettUrl);
-
-        // JacRed API endpoint (резервний)
-        var jacredUrl = host + '/api/v1.0/torrents?search=' + encodedTitle +
-                        '&apikey=' + encodeURIComponent(apiKey) +
-                        '&key=' + encodeURIComponent(apiKey) +
-                        '&uid=' + encodeURIComponent(apiKey);
-        list.push(jacredUrl);
 
         return list;
     }
@@ -343,12 +327,11 @@
 
         var apiKey = getApiKey();
         var titles = [];
-        var orig = cleanTitle(movie.original_title || movie.original_name);
-        var loc = cleanTitle(movie.title || movie.name);
+        var loc = String(movie.title || movie.name || '').trim();
+        var orig = String(movie.original_title || movie.original_name || '').trim();
 
-        // Шукаємо за чистими назвами без додавання року в пошуковий рядок
-        if (orig && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
-        if (loc && loc !== orig && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
 
         if (!titles.length) return callback(emptyMarksData());
 
@@ -691,12 +674,18 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v10')) return;
+        if (document.getElementById('likhtar-marks-style-v11')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v10';
+        style.id = 'likhtar-marks-style-v11';
         style.innerHTML = '\
-            .card__vote, .card__rate { display: none !important; }\
+            .card__vote, .card__rate, div[class*="card__vote"] {\
+                display: none !important;\
+                opacity: 0 !important;\
+                visibility: hidden !important;\
+                width: 0 !important;\
+                height: 0 !important;\
+            }\
             .likhtar-marks-container {\
                 position: absolute;\
                 top: 0.6em;\
