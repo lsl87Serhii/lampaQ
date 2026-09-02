@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v8) return;
-    window.marks_quality_merged_v8 = true;
+    if (window.marks_quality_merged_v9) return;
+    window.marks_quality_merged_v9 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -15,7 +15,7 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v8';
+    var CACHE_KEY = 'marks_quality_cache_v9';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
     var REQ_TIMEOUT = 6000;
@@ -215,7 +215,6 @@
 
     function isUaRelease(item, host) {
         if (!item) return false;
-        // Усі торенти, повернуті активним парсером з налаштувань Lampa, вважаються валідними
         if (host) return true;
 
         var fields = [
@@ -694,11 +693,12 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v8')) return;
+        if (document.getElementById('likhtar-marks-style-v9')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v8';
+        style.id = 'likhtar-marks-style-v9';
         style.innerHTML = '\
+            .card__vote, .card__rate { display: none !important; }\
             .likhtar-marks-container {\
                 position: absolute;\
                 top: 0.6em;\
