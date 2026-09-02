@@ -163,12 +163,13 @@
 
         var title = String(movie.title || movie.name || '');
         var orig = String(movie.original_title || movie.original_name || '');
-        var year = movieYear(movie);
         var isSerial = (movie.original_name || movie.first_air_date || movie.number_of_seasons) ? '2' : '1';
 
+        // &year НЕ надсилаємо: рік у TMDB часто на рік відрізняється від року
+        // в назві роздачі, і сервер відсікає потрібне ще до нас.
+        // Рік звіряємо самі, з допуском ±1.
         if (title) url += '&title=' + encodeURIComponent(title);
         if (orig) url += '&title_original=' + encodeURIComponent(orig);
-        if (year) url += '&year=' + year;
         url += '&is_serial=' + isSerial;
 
         return url;
@@ -339,6 +340,12 @@
         return '';
     }
 
+    // Широкий запит повертає музику, софт і 3D-моделі з тією ж назвою
+    function isJunkRelease(title) {
+        var t = String(title || '').toLowerCase();
+        return /(flac|lossless|\bmp3\b|kbps|\bogg\b|\baac~|discography|soundtrack|\bost\b|\[ep\]|vsti|\bvst\b|\baax\b|\.stl\b|3d print|x64\)|\[en\]$)/.test(t);
+    }
+
     function isCamRelease(title) {
         var t = String(title || '').toLowerCase();
         return /(^|[^a-z])(camrip|telesync|telecine|hdcam|hdts|ts|tc|cam|screener|scr)([^a-z]|$)/.test(t);
@@ -386,6 +393,7 @@
             if (!title) return;
 
             if (uaOnly && !isUaTracker(item)) return;
+            if (isJunkRelease(title)) return;
             if (isCamRelease(title)) return;
             if (torrentPartNumber(title) !== wantPart) return;
 
@@ -503,7 +511,7 @@
         if (!links.length) return console.log('[MARKS-UA] парсер не налаштовано');
 
         var fake = { id: 0, title: query, original_title: query, release_date: (year || '') + '' };
-        var url = buildUrl(links[0], fake, query, year ? 'full' : 'plain');
+        var url = buildUrl(links[0], fake, query, 'full');
         console.log('[MARKS-UA] джерело:', links[0].url, '| ключ:', links[0].key);
         console.log('[MARKS-UA] запит:', url);
 
