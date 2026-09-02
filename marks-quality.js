@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v7) return;
-    window.marks_quality_merged_v7 = true;
+    if (window.marks_quality_merged_v8) return;
+    window.marks_quality_merged_v8 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -15,7 +15,7 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v7';
+    var CACHE_KEY = 'marks_quality_cache_v8';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
     var REQ_TIMEOUT = 6000;
@@ -215,10 +215,8 @@
 
     function isUaRelease(item, host) {
         if (!item) return false;
-
-        if (host && (host.indexOf('jackettua') >= 0 || host.indexOf('lampaua') >= 0 || host.indexOf('spawnua') >= 0)) {
-            return true;
-        }
+        // Усі торенти, повернуті активним парсером з налаштувань Lampa, вважаються валідними
+        if (host) return true;
 
         var fields = [
             item.trackerName, item.TrackerName,
@@ -257,7 +255,6 @@
         return '';
     }
 
-    // Повертає список усіх років, згаданих у роздачі
     function extractTorrentYears(item) {
         var years = [];
         var direct = parseInt(item && (item.relased || item.released || item.year), 10);
@@ -282,14 +279,13 @@
         results.forEach(function (item) {
             if (!isUaRelease(item, host)) return;
 
-            // Жорстка перевірка року: якщо у роздачі вказано роки, і ЖОДОН з них не збігається з роком картки (±1) — відсікаємо!
             if (wantYear) {
                 var tYears = extractTorrentYears(item);
                 if (tYears.length > 0) {
                     var matchesYear = tYears.some(function (y) {
                         return Math.abs(y - wantYear) <= 1;
                     });
-                    if (!matchesYear) return; // Відкидаємо старий фільм з такою ж назвою
+                    if (!matchesYear) return;
                 }
             }
 
@@ -326,11 +322,9 @@
         var encodedTitle = encodeURIComponent(title);
         var list = [];
 
-        // 1. Jackett API
         var jackettUrl = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encodedTitle;
         list.push(jackettUrl);
 
-        // 2. JacRed API
         var jacredUrl = host + '/api/v1.0/torrents?search=' + encodedTitle +
                         '&apikey=' + encodeURIComponent(apiKey) +
                         '&key=' + encodeURIComponent(apiKey) +
@@ -349,12 +343,6 @@
         var titles = [];
         var loc = cleanTitle(movie.title || movie.name);
         var orig = cleanTitle(movie.original_title || movie.original_name);
-
-        // Додаємо варіанти пошуку:
-        // 1. «Українська назва + рік» (найкраще для усунення старих одноіменних фільмів)
-        // 2. «Українська назва»
-        // 3. «Оригінальна назва + рік»
-        // 4. «Оригінальна назва»
 
         if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) {
             if (yearNum) titles.push(loc + ' ' + yearStr);
@@ -706,10 +694,10 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v7')) return;
+        if (document.getElementById('likhtar-marks-style-v8')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v7';
+        style.id = 'likhtar-marks-style-v8';
         style.innerHTML = '\
             .likhtar-marks-container {\
                 position: absolute;\
