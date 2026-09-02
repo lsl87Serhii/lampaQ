@@ -4,11 +4,13 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v16';
+    var CACHE_KEY = 'marks_quality_cache_v18';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
+
+    var UA_TRACKERS = ['toloka', 'toloka.to', 'mazepa', 'hurtom', 'uafilm', 'baibako', 'ua-tracker', 'mova'];
 
     var memCache = {};
     var pending = {};
@@ -130,7 +132,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  TORRENT PARSING & QUALITY MATCHING
+     *  TORRENT PARSING & STRICT FILTERS
      * ------------------------------------------------------------------ */
 
     function parseResults(res) {
@@ -146,13 +148,43 @@
         return [];
     }
 
-    function detectResolution(title) {
+    function isUaRelease(item) {
+        if (!item) return false;
+
+        var tracker = String(item.trackerName || item.TrackerName || item.tracker || item.Tracker || item.indexer || '').toLowerCase();
+        var url = String(item.url || item.Details || item.Comments || '').toLowerCase();
+        var title = String(item.title || item.Title || item.name || '').toLowerCase();
+
+        for (var i = 0; i < UA_TRACKERS.length; i++) {
+            if (tracker.indexOf(UA_TRACKERS[i]) >= 0 || url.indexOf(UA_TRACKERS[i]) >= 0) {
+                return true;
+            }
+        }
+
+        return /(^|[\s\.\_\-\[\(\/])(ukr|ua|ukrainian|укр|українськ)([\s\.\_\-\]\)\/]|$)/i.test(title);
+    }
+
+    function isCamRelease(title) {
         var t = String(title || '').toLowerCase();
-        if (/(2160|4k|uhd|ultra\s*hd)/i.test(t)) return '4K';
-        if (/(1440|2k|qhd)/i.test(t)) return '2K';
-        if (/(1080|fhd|full\s*hd)/i.test(t)) return 'FHD';
-        if (/(720|hdrip|hdtv)/i.test(t)) return 'HD';
-        if (/(480|576|sd|dvdrip)/i.test(t)) return 'SD';
+        return /(camrip|telesync|hdcam|telecine|\bts\b|\bcam\b|\btc\b|hc-hdrip)/i.test(t);
+    }
+
+    function detectResolution(item) {
+        if (!item) return 'FHD';
+
+        var qStr = String(item.quality || item.Quality || item.resolution || item.Resolution || '').toLowerCase();
+        var qNum = parseInt(qStr, 10) || 0;
+
+        var title = String(item.title || item.Title || item.name || item.Name || '').toLowerCase();
+        var desc = String(item.description || item.Description || item.details || '').toLowerCase();
+        var fullText = title + ' ' + desc + ' ' + qStr;
+
+        if (qNum >= 2160 || /(2160|4k|uhd|ultra\s*hd)/i.test(fullText)) return '4K';
+        if (qNum === 1440 || /(1440|2k|qhd)/i.test(fullText)) return '2K';
+        if (qNum === 1080 || /(1080|fhd|full\s*hd)/i.test(fullText)) return 'FHD';
+        if (qNum === 720 || /(720|hdrip|hdtv)/i.test(fullText)) return 'HD';
+        if ((qNum > 0 && qNum <= 576) || /(480|576|sd|dvdrip|vhsrip)/i.test(fullText)) return 'SD';
+
         return 'FHD';
     }
 
@@ -168,45 +200,99 @@
         return years;
     }
 
-    function analyzeTorrents(items, wantYear) {
-        var best = { empty: true, resolution: '', ukr: true, eng: false, hdr: false, dolbyVision: false };
+    function extractMovieYear(movie, $card) {
+        if (movie) {
+            var fields = [movie.release_date, movie.first_air_date, movie.year, movie.date, movie.release_year, movie.air_date];
+            for (var i = 0; i < fields.length; i++) {
+                if (fields[i]) {
+                    var m = String(fields[i]).match(/(19\d{2}|20\d{2})/);
+                    if (m) {
+                        var y = parseInt(m[1], 10);
+                        if (y >= 1900 && y <= 2030) return y;
+                    }
+                }
+            }
+        }
+        if ($card && $card.length) {
+            var cardText = $card.text() || '';
+            var mCard = cardText.match(/(19\d{2}|20\d{2})/);
+            if (mCard) {
+                var yCard = parseInt(mCard[1], 10);
+                if (yCard >= 1900 && yCard <= 2030) return yCard;
+            }
+        }
+        return 0;
+    }
+
+    function isSequelMismatch(targetTitle, torrentTitle) {
+        var targetClean = String(targetTitle || '').toLowerCase().trim();
+        var torrentClean = String(torrentTitle || '').toLowerCase().trim();
+
+        // Якщо картка НЕ містить цифру 2/3/4 в назві, а торент містить " 2 ", " 3 ", " 2 /" - це сиквел
+        var targetHasNum = /\b(2|3|4|5|ii|iii|iv)\b/.test(targetClean);
+        var torrentHasNum = /\b(2|3|4|5|ii|iii|iv)\b/.test(torrentClean);
+
+        if (!targetHasNum && torrentHasNum) {
+            return true;
+        }
+        return false;
+    }
+
+    function analyzeTorrents(items, wantYear, targetTitle) {
+        var best = { empty: true, resolution: '', ukr: false, eng: false, hdr: false, dolbyVision: false };
         var bestResIndex = -1;
-        var found = false;
+        var foundValid = false;
 
         items.forEach(function (item) {
+            if (!item) return;
+
             var title = String(item.Title || item.title || item.name || '');
             if (!title) return;
 
-            if (wantYear) {
-                var tYears = extractTorrentYears(title);
+            // Блокування екранок (Telesync/Cam)
+            if (isCamRelease(title)) return;
+
+            // Блокування плутанини з сиквелами ("Ваяна" vs "Ваяна 2")
+            if (isSequelMismatch(targetTitle, title)) return;
+
+            // Жорстока перевірка року виходу
+            var tYears = extractTorrentYears(title);
+            if (wantYear > 0) {
                 if (tYears.length > 0) {
                     var match = tYears.some(function (y) { return Math.abs(y - wantYear) <= 1; });
-                    if (!match) return;
+                    if (!match) return; // Рік торента не збігається з карткою Lampa
+                } else {
+                    return; // Якщо рік картки відомий, а в торенті рік відсутній — відсікаємо
                 }
             }
 
-            var tLower = title.toLowerCase();
-            if (/(camrip|telesync|\bts\b|\bcam\b|screener)/i.test(tLower)) return;
+            foundValid = true;
 
-            found = true;
+            if (isUaRelease(item)) best.ukr = true;
+
+            var tLower = title.toLowerCase();
             if (/(eng|english|multi)/i.test(tLower)) best.eng = true;
 
-            var res = detectResolution(title);
+            var res = detectResolution(item);
             var resIdx = RES_ORDER.indexOf(res);
+
             if (resIdx >= bestResIndex) {
                 bestResIndex = resIdx;
                 best.resolution = res;
 
-                if (tLower.indexOf('dolby vision') >= 0 || tLower.indexOf('dovi') >= 0) {
+                var isDv = tLower.indexOf('dolby vision') >= 0 || tLower.indexOf('dovi') >= 0;
+                var videoType = String(item.videotype || item.VideoType || '').toLowerCase();
+
+                if (isDv) {
                     best.dolbyVision = true;
                     best.hdr = true;
-                } else if (/(hdr10\+|hdr10|hdr)/i.test(tLower)) {
+                } else if (videoType === 'hdr' || /(hdr10\+|hdr10|hdr)/i.test(tLower)) {
                     best.hdr = true;
                 }
             }
         });
 
-        if (!found) return { empty: true };
+        if (!foundValid) return { empty: true };
         best.empty = false;
         return best;
     }
@@ -215,10 +301,8 @@
      *  SEARCH FLOW
      * ------------------------------------------------------------------ */
 
-    function searchMovie(movie, callback) {
-        var dateRaw = movie.release_date || movie.first_air_date || movie.year || '';
-        var yearStr = String(dateRaw).substr(0, 4);
-        var yearNum = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : 0;
+    function searchMovie(movie, $card, callback) {
+        var yearNum = extractMovieYear(movie, $card);
 
         var locTitle = String(movie.title || movie.name || '').replace(/[!\?\:\–\—\.\,\_\/]/g, ' ').trim();
         var origTitle = String(movie.original_title || movie.original_name || '').replace(/[!\?\:\–\—\.\,\_\/]/g, ' ').trim();
@@ -238,7 +322,7 @@
                 var items = parseResults(res);
                 if (!items.length) return tryQuery(index + 1);
 
-                var data = analyzeTorrents(items, yearNum);
+                var data = analyzeTorrents(items, yearNum, locTitle);
                 if (data && !data.empty) return callback(data);
 
                 tryQuery(index + 1);
@@ -258,7 +342,7 @@
 
     function runTask(task) {
         active++;
-        searchMovie(task.movie, function (data) {
+        searchMovie(task.movie, task.$card, function (data) {
             setCache(task.key, data);
             var cbs = pending[task.key] || [];
             delete pending[task.key];
@@ -270,7 +354,7 @@
         });
     }
 
-    function resolveMarks(movie, callback) {
+    function resolveMarks(movie, $card, callback) {
         var id = movie.id || movie.kp_id || movie.imdb_id;
         var type = (movie.media_type || movie.type || ((movie.name || movie.original_name) ? 'tv' : 'movie'));
         var key = type + '_' + id;
@@ -284,7 +368,7 @@
         }
 
         pending[key] = [callback];
-        queue.push({ key: key, movie: movie });
+        queue.push({ key: key, movie: movie, $card: $card });
         pump();
     }
 
@@ -344,10 +428,9 @@
         }
 
         if (isSettingEnabled('marks_year', true)) {
-            var rawYear = movie.release_date || movie.first_air_date || movie.year || '';
-            var yearStr = String(rawYear).substr(0, 4);
-            if (/^\d{4}$/.test(yearStr)) {
-                container.append(createBadge('year', yearStr));
+            var yearNum = extractMovieYear(movie, $card);
+            if (yearNum > 0) {
+                container.append(createBadge('year', String(yearNum)));
             }
         }
     }
@@ -375,7 +458,7 @@
                 containerParent.append(marksContainer);
             }
 
-            resolveMarks(movie, function (data) {
+            resolveMarks(movie, $card, function (data) {
                 if (!document.body.contains($card[0])) return;
                 renderBadges(marksContainer, data, movie, $card);
             });
@@ -387,9 +470,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v16')) return;
+        if (document.getElementById('likhtar-marks-style-v18')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v16';
+        style.id = 'likhtar-marks-style-v18';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
