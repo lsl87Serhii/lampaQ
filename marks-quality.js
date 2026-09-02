@@ -1,12 +1,15 @@
 (function () {
     'use strict';
 
+    if (window.marks_quality_merged_v15) return;
+    window.marks_quality_merged_v15 = true;
+
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
         return;
     }
 
-    window.MARKS_QUALITY_VERSION = 13;
+    window.MARKS_QUALITY_VERSION = 15;
 
     /* ------------------------------------------------------------------ *
      *  CONFIG & CACHE
@@ -14,10 +17,10 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v13';
+    var CACHE_KEY = 'marks_quality_cache_v15';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
-    var REQ_TIMEOUT = 15000;
+    var REQ_TIMEOUT = 15000;                           // Таймаут 15 сек під SpawnUA
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
@@ -48,7 +51,7 @@
 
     function cleanTitle(raw) {
         return String(raw || '')
-            .replace(/[:\-\–\—\.\,\_\/]/g, ' ')
+            .replace(/[!\?\:\–\—\.\,\_\/]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }
@@ -81,9 +84,9 @@
 
         var urlKeys = [
             'jackett_url',
-            'parser_torrent_url',
-            'lampaua_url',
             'spawnua_url',
+            'lampaua_url',
+            'parser_torrent_url',
             'jacred_url',
             'jackett_urltwo',
             'parser_url'
@@ -107,7 +110,7 @@
             } catch (e) {}
         }
 
-        var keyKeys = ['jackett_key', 'parser_key', 'jacred_key'];
+        var keyKeys = ['jackett_key', 'spawnua_key', 'parser_key', 'jacred_key'];
         for (var j = 0; j < keyKeys.length; j++) {
             var k = Lampa.Storage.get(keyKeys[j], '');
             if (k && typeof k === 'string' && k.trim()) {
@@ -169,11 +172,8 @@
             var network = new Lampa.Reguest();
             network.timeout(REQ_TIMEOUT);
             network.silent(url, function (res) {
-                if (res) {
-                    callback(null, typeof res === 'object' ? JSON.stringify(res) : String(res));
-                } else {
-                    callback(new Error('Empty response'));
-                }
+                if (res) callback(null, res);
+                else callback(new Error('Empty response'));
             }, function (err) {
                 callback(err || new Error('Request failed'));
             });
@@ -183,11 +183,11 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  TORRENT PARSING & MATCHING
+     *  TORRENT PARSING & RESOLUTION DETECTOR
      * ------------------------------------------------------------------ */
 
     function emptyMarksData() {
-        return { empty: true, resolution: 'SD', ukr: false, eng: false, hdr: false, dolbyVision: false };
+        return { empty: true, resolution: '', ukr: false, eng: false, hdr: false, dolbyVision: false };
     }
 
     function getCardType(card) {
@@ -197,58 +197,45 @@
     }
 
     function parseTorrents(body) {
+        if (!body) return [];
+        if (Array.isArray(body)) return body;
+
         var parsed = null;
-        try { parsed = typeof body === 'string' ? JSON.parse(body) : body; } catch (e) { return []; }
-        if (!parsed) return [];
-        if (parsed.contents) {
-            try { parsed = JSON.parse(parsed.contents); } catch (e2) { }
+        if (typeof body === 'string') {
+            try { parsed = JSON.parse(body); } catch (e) { return []; }
+        } else {
+            parsed = body;
         }
+
+        if (!parsed) return [];
         if (Array.isArray(parsed)) return parsed;
+        if (parsed.contents) return parseTorrents(parsed.contents);
         if (Array.isArray(parsed.Results)) return parsed.Results;
         if (Array.isArray(parsed.results)) return parsed.results;
         if (Array.isArray(parsed.items)) return parsed.items;
         if (Array.isArray(parsed.torrents)) return parsed.torrents;
-        if (parsed.data && Array.isArray(parsed.data)) return parsed.data;
+        if (Array.isArray(parsed.data)) return parsed.data;
+
         return [];
     }
 
-    function isUaRelease(item, host) {
-        if (!item) return false;
-        if (host) return true;
-
-        var fields = [
-            item.trackerName, item.TrackerName,
-            item.tracker, item.Tracker,
-            item.url, item.Details, item.Comments
-        ];
-
-        for (var i = 0; i < fields.length; i++) {
-            var v = String(fields[i] || '').toLowerCase();
-            if (!v) continue;
-            for (var j = 0; j < UA_TRACKERS.length; j++) {
-                if (v.indexOf(UA_TRACKERS[j]) >= 0) return true;
-            }
-        }
-
-        var t = String(item.title || item.Title || '').toLowerCase();
-        return /(^|[\s\.\_\-\[\(\/])(ukr|ua|ukrainian|укр|українськ)([\s\.\_\-\]\)\/]|$)/i.test(t);
-    }
-
     function detectResolution(item) {
-        var t = String(item && (item.title || item.Title) || '').toLowerCase();
+        if (!item) return 'FHD';
 
-        if (/(^|[^a-z0-9а-яіїєґ])(2160[pi]?|4k|uhd)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return '4K';
-        if (/(^|[^a-z0-9а-яіїєґ])(1440[pi]?|2k)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return '2K';
-        if (/(^|[^a-z0-9а-яіїєґ])(1080[pi]?|fhd|full\s*hd)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'FHD';
-        if (/(^|[^a-z0-9а-яіїєґ])(720[pi]?|hdrip|hdtv)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'HD';
-        if (/(^|[^a-z0-9а-яіїєґ])(480[pi]?|360[pi]?|sd|dvdrip|vhsrip)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'SD';
+        var qStr = String(item.quality || item.Quality || item.resolution || item.Resolution || '').toLowerCase();
+        var qNum = parseInt(qStr, 10) || 0;
 
-        var q = parseInt(item && (item.quality || item.Quality), 10) || 0;
-        if (q >= 2160) return '4K';
-        if (q >= 1440) return '2K';
-        if (q >= 1080) return 'FHD';
-        if (q >= 720) return 'HD';
-        return '';
+        var title = String(item.title || item.Title || item.name || item.Name || '').toLowerCase();
+        var desc = String(item.description || item.Description || item.details || '').toLowerCase();
+        var fullText = title + ' ' + desc + ' ' + qStr;
+
+        if (qNum >= 2160 || /(2160|4k|uhd|ultra\s*hd)/i.test(fullText)) return '4K';
+        if (qNum === 1440 || /(1440|2k|qhd)/i.test(fullText)) return '2K';
+        if (qNum === 1080 || /(1080|fhd|full\s*hd)/i.test(fullText)) return 'FHD';
+        if (qNum === 720 || /(720|hdrip|hdtv)/i.test(fullText)) return 'HD';
+        if ((qNum > 0 && qNum <= 576) || /(480|576|sd|dvdrip|vhsrip)/i.test(fullText)) return 'SD';
+
+        return 'FHD';
     }
 
     function extractTorrentYears(item) {
@@ -267,13 +254,13 @@
         return years;
     }
 
-    function analyzeTorrents(results, movie, wantYear, host) {
+    function analyzeTorrents(results, movie, wantYear) {
         var best = emptyMarksData();
-        var bestRes = '';
+        var bestResIndex = -1;
         var found = false;
 
         results.forEach(function (item) {
-            if (!isUaRelease(item, host)) return;
+            if (!item) return;
 
             if (wantYear) {
                 var tYears = extractTorrentYears(item);
@@ -285,24 +272,33 @@
                 }
             }
 
-            var t = String(item && (item.title || item.Title) || '').toLowerCase();
+            var t = String(item.title || item.Title || item.name || '').toLowerCase();
             if (/(^|[^a-zа-яіїєґ])(ts|telesync|camrip|cam|tc|screener)([^a-zа-яіїєґ]|$)/i.test(t)) return;
 
             found = true;
-            if (/(^|[^a-z])(eng|english|multi)([^a-z]|$)/i.test(t)) best.eng = true;
+            if (/(eng|english|multi)/i.test(t)) best.eng = true;
 
             var res = detectResolution(item);
-            if (res && RES_ORDER.indexOf(res) >= RES_ORDER.indexOf(bestRes)) {
-                bestRes = res;
+            var resIndex = RES_ORDER.indexOf(res);
+
+            if (resIndex >= bestResIndex) {
+                bestResIndex = resIndex;
+                best.resolution = res;
+
                 var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t);
-                var videoType = String(item && (item.videotype || item.VideoType) || '').toLowerCase();
-                best.dolbyVision = isDv;
-                best.hdr = isDv || videoType === 'hdr' || /(^|[^a-z])hdr(10)?(\+)?([^a-z]|$)/i.test(t);
+                var videoType = String(item.videotype || item.VideoType || '').toLowerCase();
+
+                if (isDv) {
+                    best.dolbyVision = true;
+                    best.hdr = true;
+                } else if (videoType === 'hdr' || /(hdr10\+|hdr10|hdr)/i.test(t)) {
+                    best.hdr = true;
+                }
             }
         });
 
         if (!found) return emptyMarksData();
-        best.resolution = bestRes || 'SD';
+
         best.ukr = true;
         best.empty = false;
         return best;
@@ -316,6 +312,7 @@
         var encoded = encodeURIComponent(title);
         var list = [];
         list.push(host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encoded);
+        list.push(host + '/api/v2.0/indexers/all/results/torznab/api?apikey=' + encodeURIComponent(apiKey) + '&t=search&q=' + encoded);
         return list;
     }
 
@@ -325,11 +322,11 @@
         var hosts = config.hosts;
 
         var titles = [];
-        var orig = cleanTitle(movie.original_title || movie.original_name);
         var loc = cleanTitle(movie.title || movie.name);
+        var orig = cleanTitle(movie.original_title || movie.original_name);
 
-        if (orig && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
-        if (loc && loc !== orig && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
 
         if (!titles.length || !hosts.length) return callback(emptyMarksData());
 
@@ -355,7 +352,7 @@
                 var results = parseTorrents(body);
                 if (!results.length) return runTask(index + 1);
 
-                var data = analyzeTorrents(results, movie, yearNum, task.host);
+                var data = analyzeTorrents(results, movie, yearNum);
                 if (data && !data.empty) return callback(data);
 
                 runTask(index + 1);
@@ -365,18 +362,17 @@
         runTask(0);
     }
 
-    function searchTorrents(movie, callback) {
+    function searchTorrentsForMovie(movie, callback) {
         var dateRaw = movie.release_date || movie.first_air_date || movie.year || '';
         var yearStr = String(dateRaw).substr(0, 4);
         var yearNum = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : 0;
 
-        // Використовуємо рідний модуль пошуку Lampa (якщо доступний)
         if (typeof Lampa !== 'undefined' && Lampa.Jackett && typeof Lampa.Jackett.search === 'function') {
             try {
                 Lampa.Jackett.search(movie, function (res) {
                     var items = parseTorrents(res);
                     if (items && items.length) {
-                        var data = analyzeTorrents(items, movie, yearNum, 'native');
+                        var data = analyzeTorrents(items, movie, yearNum);
                         if (data && !data.empty) return callback(data);
                     }
                     fallbackSearch(movie, yearNum, callback);
@@ -416,7 +412,7 @@
             pump();
         }
 
-        searchTorrents(task.movie, finish);
+        searchTorrentsForMovie(task.movie, finish);
     }
 
     function resolveMarks(movie, callback) {
@@ -485,12 +481,20 @@
             return;
         }
 
+        // ЯКЩО ТОРЕНТІВ НЕ ЗНАЙДЕНО — ПОСТЕР ЗАЛИШАЄТЬСЯ ЧИСТИМ
+        if (data.empty) {
+            if (cardRoot && cardRoot.length) cardRoot.removeClass('likhtar-marks-active likhtar-marks-has-custom-rating');
+            return;
+        }
+
         if (data.ukr && isSettingEnabled('marks_ua', true)) container.append(createCardBadge('ua', 'UA'));
         if (data.eng && isSettingEnabled('marks_en', true)) container.append(createCardBadge('en', 'EN'));
 
-        if (data.resolution && data.resolution !== 'SD') {
+        if (data.resolution) {
             if (data.resolution === '4K' && isSettingEnabled('marks_4k', true)) {
                 container.append(createCardBadge('4k', '4K'));
+            } else if (data.resolution === '2K' && isSettingEnabled('marks_fhd', true)) {
+                container.append(createCardBadge('fhd', '2K'));
             } else if (data.resolution === 'FHD' && isSettingEnabled('marks_fhd', true)) {
                 container.append(createCardBadge('fhd', '1080p'));
             } else if (data.resolution === 'HD' && isSettingEnabled('marks_fhd', true)) {
@@ -545,7 +549,6 @@
             containerParent.append(marksContainer);
         }
 
-        renderCardBadges(marksContainer, emptyMarksData(), movie, card);
         resolveMarks(movie, function (bestData) {
             if (!document.body.contains(card[0])) return;
             renderCardBadges(marksContainer, bestData, movie, card);
@@ -695,10 +698,10 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v13')) return;
+        if (document.getElementById('likhtar-marks-style-v15')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v13';
+        style.id = 'likhtar-marks-style-v15';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
