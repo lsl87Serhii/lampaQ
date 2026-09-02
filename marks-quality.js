@@ -1,13 +1,12 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v11) return;
-    window.marks_quality_merged_v11 = true;
-
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
         return;
     }
+
+    window.MARKS_QUALITY_VERSION = 12;
 
     /* ------------------------------------------------------------------ *
      *  CONFIG & CACHE
@@ -15,10 +14,10 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v11';
+    var CACHE_KEY = 'marks_quality_cache_v12';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
-    var REQ_TIMEOUT = 15000;                           // Збільшено до 15 сек для SpawnUA
+    var REQ_TIMEOUT = 15000;                           // Таймаут 15 сек під SpawnUA
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
@@ -34,7 +33,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  HELPERS & HOST DETECTION
+     *  HELPERS & PARSER CONFIG DETECTION
      * ------------------------------------------------------------------ */
 
     function normalizeHost(raw) {
@@ -45,6 +44,13 @@
                  .replace(/\/api\/.*$/i, '')
                  .replace(/\/+$/, '');
         return raw ? (proto + raw) : '';
+    }
+
+    function cleanTitle(raw) {
+        return String(raw || '')
+            .replace(/[:\-\–\—\.\,\_\/]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     function normalizeSettingBoolean(val, defaultVal) {
@@ -63,25 +69,17 @@
         return normalizeSettingBoolean(Lampa.Storage.get(key, defaultVal), defaultVal);
     }
 
-    function getApiKey() {
-        var keys = ['jackett_key', 'parser_key', 'jacred_key'];
-        for (var i = 0; i < keys.length; i++) {
-            var k = Lampa.Storage.get(keys[i], '');
-            if (k && typeof k === 'string' && k.trim()) return k.trim();
-        }
-        return 'ua';
-    }
-
-    function getActiveParserHosts() {
-        var list = [];
+    function getParserConfig() {
+        var hosts = [];
+        var key = 'ua';
 
         var customSetting = String(Lampa.Storage.get('marks_jacred_url', 'auto') || 'auto').trim();
         if (customSetting && customSetting.toLowerCase() !== 'auto') {
             var manual = normalizeHost(customSetting);
-            if (manual) list.push(manual);
+            if (manual) hosts.push(manual);
         }
 
-        var keys = [
+        var urlKeys = [
             'jackett_url',
             'parser_torrent_url',
             'lampaua_url',
@@ -91,30 +89,36 @@
             'parser_url'
         ];
 
-        for (var i = 0; i < keys.length; i++) {
-            var v = Lampa.Storage.get(keys[i], '');
+        for (var i = 0; i < urlKeys.length; i++) {
+            var v = Lampa.Storage.get(urlKeys[i], '');
             if (v && typeof v === 'string' && v.trim()) {
                 var host = normalizeHost(v);
-                if (host && list.indexOf(host) === -1) list.push(host);
+                if (host && hosts.indexOf(host) === -1) hosts.push(host);
             }
         }
 
-        if (typeof Lampa.Parser !== 'undefined') {
+        if (typeof Lampa !== 'undefined' && Lampa.Parser) {
             try {
                 var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
                 if (pUrl) {
-                    var normPUrl = normalizeHost(pUrl);
-                    if (normPUrl && list.indexOf(normPUrl) === -1) list.push(normPUrl);
+                    var normP = normalizeHost(pUrl);
+                    if (normP && hosts.indexOf(normP) === -1) hosts.push(normP);
                 }
             } catch (e) {}
         }
 
-        if (!list.length) {
-            var fb = normalizeHost(DEFAULT_HOST);
-            if (fb) list.push(fb);
+        var keyKeys = ['jackett_key', 'parser_key', 'jacred_key'];
+        for (var j = 0; j < keyKeys.length; j++) {
+            var k = Lampa.Storage.get(keyKeys[j], '');
+            if (k && typeof k === 'string' && k.trim()) {
+                key = k.trim();
+                break;
+            }
         }
 
-        return list;
+        if (!hosts.length) hosts.push(normalizeHost(DEFAULT_HOST));
+
+        return { hosts: hosts, key: key };
     }
 
     /* ------------------------------------------------------------------ *
@@ -157,22 +161,49 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  NETWORK
+     *  NETWORK REQUESTS (WITH PROXY FALLBACK)
      * ------------------------------------------------------------------ */
 
     function fetchUrl(url, callback) {
+        var done = false;
+
+        function finish(err, res) {
+            if (done) return;
+            done = true;
+            callback(err, res);
+        }
+
         try {
             var network = new Lampa.Reguest();
             network.timeout(REQ_TIMEOUT);
             network.silent(url, function (res) {
-                if (typeof res === 'object') callback(null, JSON.stringify(res));
-                else if (typeof res === 'string') callback(null, res);
-                else callback(new Error('Empty response'));
-            }, function (err) {
-                callback(err || new Error('Request failed'));
+                if (res) {
+                    finish(null, typeof res === 'object' ? JSON.stringify(res) : String(res));
+                } else {
+                    tryProxy();
+                }
+            }, function () {
+                tryProxy();
             });
         } catch (e) {
-            callback(e);
+            tryProxy();
+        }
+
+        function tryProxy() {
+            if (done) return;
+            var proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+            try {
+                var net2 = new Lampa.Reguest();
+                net2.timeout(10000);
+                net2.silent(proxyUrl, function (res2) {
+                    if (res2) finish(null, typeof res2 === 'object' ? JSON.stringify(res2) : String(res2));
+                    else finish(new Error('Failed request'));
+                }, function (err2) {
+                    finish(err2 || new Error('Proxy failed'));
+                });
+            } catch (e2) {
+                finish(e2);
+            }
         }
     }
 
@@ -230,14 +261,12 @@
 
     function detectResolution(item) {
         var t = String(item && (item.title || item.Title) || '').toLowerCase();
-        var b = '(?:^|[^a-z0-9а-яіїєґ])';
-        var e = '(?:[^a-z0-9а-яіїєґ]|$)';
 
-        if (new RegExp(b + '(2160[pi]?|4k|uhd)' + e, 'i').test(t)) return '4K';
-        if (new RegExp(b + '(1440[pi]?|2k)' + e, 'i').test(t)) return '2K';
-        if (new RegExp(b + '(1080[pi]?|fhd|full ?hd)' + e, 'i').test(t)) return 'FHD';
-        if (new RegExp(b + '(720[pi]?|hdrip|hdtv)' + e, 'i').test(t)) return 'HD';
-        if (new RegExp(b + '(480[pi]?|360[pi]?|sd|dvdrip|vhsrip)' + e, 'i').test(t)) return 'SD';
+        if (/(^|[^a-z0-9а-яіїєґ])(2160[pi]?|4k|uhd)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return '4K';
+        if (/(^|[^a-z0-9а-яіїєґ])(1440[pi]?|2k)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return '2K';
+        if (/(^|[^a-z0-9а-яіїєґ])(1080[pi]?|fhd|full\s*hd)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'FHD';
+        if (/(^|[^a-z0-9а-яіїєґ])(720[pi]?|hdrip|hdtv)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'HD';
+        if (/(^|[^a-z0-9а-яіїєґ])(480[pi]?|360[pi]?|sd|dvdrip|vhsrip)([^a-z0-9а-яіїєґ]|$)/i.test(t)) return 'SD';
 
         var q = parseInt(item && (item.quality || item.Quality), 10) || 0;
         if (q >= 2160) return '4K';
@@ -288,9 +317,7 @@
             if (/(^|[^a-z])(eng|english|multi)([^a-z]|$)/i.test(t)) best.eng = true;
 
             var res = detectResolution(item);
-            if (!res) return;
-
-            if (RES_ORDER.indexOf(res) > RES_ORDER.indexOf(bestRes)) {
+            if (res && RES_ORDER.indexOf(res) >= RES_ORDER.indexOf(bestRes)) {
                 bestRes = res;
                 var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t);
                 var videoType = String(item && (item.videotype || item.VideoType) || '').toLowerCase();
@@ -311,11 +338,17 @@
      * ------------------------------------------------------------------ */
 
     function buildUrls(host, title, apiKey) {
-        var encodedTitle = encodeURIComponent(title);
+        var encoded = encodeURIComponent(title);
         var list = [];
 
-        var jackettUrl = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encodedTitle;
-        list.push(jackettUrl);
+        // 1. Jackett Results API
+        list.push(host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encoded);
+
+        // 2. Torznab API
+        list.push(host + '/api/v2.0/indexers/all/results/torznab/api?apikey=' + encodeURIComponent(apiKey) + '&t=search&q=' + encoded);
+
+        // 3. JacRed / Custom API
+        list.push(host + '/api/v1.0/torrents?search=' + encoded + '&apikey=' + encodeURIComponent(apiKey) + '&key=' + encodeURIComponent(apiKey));
 
         return list;
     }
@@ -325,17 +358,19 @@
         var yearStr = String(dateRaw).substr(0, 4);
         var yearNum = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : 0;
 
-        var apiKey = getApiKey();
-        var titles = [];
-        var loc = String(movie.title || movie.name || '').trim();
-        var orig = String(movie.original_title || movie.original_name || '').trim();
+        var config = getParserConfig();
+        var apiKey = config.key;
+        var hosts = config.hosts;
 
-        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
-        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
+        var titles = [];
+        var orig = cleanTitle(movie.original_title || movie.original_name);
+        var loc = cleanTitle(movie.title || movie.name);
+
+        // Спершу шукаємо за оригінальною назвою (для точного збігу на Толоці)
+        if (orig && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
+        if (loc && loc !== orig && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
 
         if (!titles.length) return callback(emptyMarksData());
-
-        var hosts = getActiveParserHosts();
         if (!hosts.length) return callback(emptyMarksData());
 
         var tasks = [];
@@ -417,8 +452,15 @@
 
     function getMovieFromCard(cardNode) {
         if (!cardNode) return null;
-        var card = $(cardNode);
-        return cardNode.heroMovieData || cardNode.card_data || card.data('item') || cardNode.item || cardNode.data || null;
+        var $card = $(cardNode);
+        return cardNode.heroMovieData ||
+               cardNode.card_data ||
+               cardNode.item ||
+               cardNode.data ||
+               $card.data('item') ||
+               $card.data('data') ||
+               $card.data('card_data') ||
+               null;
     }
 
     function extractRating(movie) {
@@ -449,6 +491,10 @@
 
     function renderCardBadges(container, data, movie, cardRoot) {
         container.empty();
+
+        if (cardRoot && cardRoot.length) {
+            cardRoot.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
+        }
 
         if (!isSettingEnabled('marks_enabled', true)) {
             if (cardRoot && cardRoot.length) cardRoot.removeClass('likhtar-marks-active likhtar-marks-has-custom-rating');
@@ -503,6 +549,8 @@
     function addMarksToCard(card, movie, viewSelector) {
         if (!isSettingEnabled('marks_enabled', true)) return;
 
+        card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
+
         var containerParent = viewSelector ? card.find(viewSelector).first() : card;
         if (!containerParent.length) containerParent = card;
         if (containerParent.css('position') === 'static') containerParent.css('position', 'relative');
@@ -540,8 +588,10 @@
 
         cardsToProcess.each(function () {
             var card = $(this);
-            var movie = getMovieFromCard(this);
 
+            card.find('.card__vote, .card__rate, div[class*="card__vote"]').remove();
+
+            var movie = getMovieFromCard(this);
             if (!movie || (!movie.id && !movie.kp_id && !movie.imdb_id)) return;
 
             card.addClass('likhtar-marks-processed');
@@ -642,27 +692,14 @@
 
     function initCardObserver() {
         var queued = false;
-        var pendingRoots = [];
 
-        function scheduleProcess(mutations) {
-            if (mutations && mutations.length) {
-                for (var i = 0; i < mutations.length; i++) {
-                    var added = mutations[i].addedNodes;
-                    for (var j = 0; j < added.length; j++) {
-                        if (added[j] && added[j].nodeType === 1) pendingRoots.push(added[j]);
-                    }
-                }
-            }
+        function scheduleProcess() {
             if (queued) return;
             queued = true;
             setTimeout(function () {
                 queued = false;
-                if (pendingRoots.length) {
-                    var batch = pendingRoots.slice(0);
-                    pendingRoots = [];
-                    processCards(batch);
-                } else processCards();
-            }, 120);
+                processCards();
+            }, 100);
         }
 
         var observer = new MutationObserver(scheduleProcess);
@@ -670,57 +707,60 @@
         observer.observe(target, { childList: true, subtree: true });
 
         processCards();
-        setTimeout(processCards, 500);
+        setInterval(processCards, 800);
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v11')) return;
+        if (document.getElementById('likhtar-marks-style-v12')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v11';
-        style.innerHTML = '\
-            .card__vote, .card__rate, div[class*="card__vote"] {\
-                display: none !important;\
-                opacity: 0 !important;\
-                visibility: hidden !important;\
-                width: 0 !important;\
-                height: 0 !important;\
-            }\
-            .likhtar-marks-container {\
-                position: absolute;\
-                top: 0.6em;\
-                left: 0.4em;\
-                display: flex;\
-                flex-direction: column;\
-                gap: 0.2em;\
-                z-index: 20;\
-                pointer-events: none;\
-            }\
-            .likhtar-marks-badge {\
-                padding: 0.3em 0.45em;\
-                font-size: 0.75em;\
-                font-weight: 800;\
-                line-height: 1;\
-                border-radius: 0.3em;\
-                display: inline-flex;\
-                align-items: center;\
-                justify-content: center;\
-                border: 1px solid rgba(255,255,255,0.2);\
-                box-shadow: 0 2px 5px rgba(0,0,0,0.5);\
-                color: #fff;\
-            }\
-            .likhtar-marks-badge--ua  { background: linear-gradient(135deg, #1565c0, #42a5f5); }\
-            .likhtar-marks-badge--en  { background: linear-gradient(135deg, #37474f, #78909c); }\
-            .likhtar-marks-badge--4k  { background: linear-gradient(135deg, #e65100, #ff9800); }\
-            .likhtar-marks-badge--fhd { background: linear-gradient(135deg, #4a148c, #ab47bc); }\
-            .likhtar-marks-badge--hd  { background: linear-gradient(135deg, #1b5e20, #66bb6a); }\
-            .likhtar-marks-badge--hdr { background: linear-gradient(135deg, #f57f17, #ffeb3b); color: #000; }\
-            .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; }\
-            .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); }\
-            .likhtar-marks-star { margin-right: 0.15em; }\
-            .card.likhtar-marks-active .card__type,\
-            .card.likhtar-marks-active .card__quality { display: none !important; }\
-        ';
+        style.id = 'likhtar-marks-style-v12';
+        style.innerHTML = `
+            .card__vote, .card__rate, div[class*="card__vote"], div[class*="card__rate"] {
+                display: none !important;
+                opacity: 0 !important;
+                visibility: hidden !important;
+                width: 0 !important;
+                height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow: hidden !important;
+            }
+            .likhtar-marks-container {
+                position: absolute;
+                top: 0.5em;
+                left: 0.4em;
+                display: flex;
+                flex-direction: column;
+                gap: 0.2em;
+                z-index: 20;
+                pointer-events: none;
+            }
+            .likhtar-marks-badge {
+                padding: 0.3em 0.45em;
+                font-size: 0.75em;
+                font-weight: 800;
+                line-height: 1;
+                border-radius: 0.3em;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 1px solid rgba(255,255,255,0.2);
+                box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+                color: #fff;
+            }
+            .likhtar-marks-badge--ua  { background: linear-gradient(135deg, #1565c0, #42a5f5); }
+            .likhtar-marks-badge--en  { background: linear-gradient(135deg, #37474f, #78909c); }
+            .likhtar-marks-badge--4k  { background: linear-gradient(135deg, #e65100, #ff9800); }
+            .likhtar-marks-badge--fhd { background: linear-gradient(135deg, #4a148c, #ab47bc); }
+            .likhtar-marks-badge--hd  { background: linear-gradient(135deg, #1b5e20, #66bb6a); }
+            .likhtar-marks-badge--hdr { background: linear-gradient(135deg, #f57f17, #ffeb3b); color: #000; }
+            .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; }
+            .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); }
+            .likhtar-marks-star { margin-right: 0.15em; }
+            .card.likhtar-marks-active .card__type,
+            .card.likhtar-marks-active .card__quality { display: none !important; }
+        `;
 
         document.head.appendChild(style);
     }
@@ -735,6 +775,15 @@
         injectStyle();
         initCardObserver();
         processCards();
+
+        if (Lampa.Listener && Lampa.Listener.follow) {
+            Lampa.Listener.follow('activity', function (e) {
+                if (e.type === 'render' || e.type === 'build') {
+                    setTimeout(processCards, 150);
+                    setTimeout(processCards, 500);
+                }
+            });
+        }
     }
 
     if (window.appready) runInit();
