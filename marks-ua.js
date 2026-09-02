@@ -11,9 +11,11 @@
 
     var LOG = false;                               // true — детальні логи в консоль
     var CACHE_KEY = 'marks_ua_cache_v1';
-    var CACHE_TIME = 12 * 60 * 60 * 1000;          // 12 годин
+    var CACHE_TIME = 12 * 60 * 60 * 1000;          // 12 годин — успішна відповідь
+    var CACHE_FAIL_TIME = 10 * 60 * 1000;          // 10 хвилин — таймаут/помилка
     var CACHE_LIMIT = 600;                         // максимум записів у кеші
-    var MAX_PARALLEL = 2;                          // паралельних запитів до парсера
+    var MAX_PARALLEL = 1;                          // балансери не люблять паралельних запитів
+    var REQUEST_GAP = 250;                         // пауза між запитами, мс
     var YEAR_TOLERANCE = 1;                        // допуск розбіжності року
 
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
@@ -70,6 +72,15 @@
     // Повторює логіку Lampa: parserLinks() + selectParserLinks()
     // 'one' — основна, 'two' — додаткова, інше — обидві
     function getParserLinks() {
+        // Власна адреса з налаштувань плагіна має пріоритет над парсером Lampa
+        var ownUrl = String(Lampa.Storage.get('marks_parser_url', '') || '').trim();
+        if (ownUrl) {
+            return [{
+                url: checkEmptyUrl(ownUrl),
+                key: String(Lampa.Storage.get('marks_parser_key', '') || '').trim()
+            }];
+        }
+
         var links = [
             { url: sfield('jackett_url', ''), key: sfield('jackett_key', '') },
             { url: sfield('jackett_url_two', ''), key: sfield('jackett_key_two', '') }
@@ -105,15 +116,16 @@
     function getCache(key) {
         if (memCache[key]) return memCache[key];
         var item = readStore()[key];
-        if (item && item._ts && (Date.now() - item._ts < CACHE_TIME)) {
+        if (item && item._ts && (Date.now() - item._ts < (item._ttl || CACHE_TIME))) {
             memCache[key] = item;
             return item;
         }
         return null;
     }
 
-    function setCache(key, data) {
+    function setCache(key, data, ttl) {
         data._ts = Date.now();
+        data._ttl = ttl || CACHE_TIME;
         memCache[key] = data;
         try {
             var store = readStore();
@@ -426,11 +438,12 @@
      *  ПОШУК
      * ------------------------------------------------------------------ */
 
+    // callback(data, failed) — failed=true, якщо жоден запит не дійшов до сервера
     function searchMovie(movie, callback) {
         var links = getParserLinks();
         if (!links.length) {
             log('парсер не налаштовано');
-            return callback(emptyData());
+            return callback(emptyData(), false);
         }
 
         var orig = String(movie.original_title || movie.original_name || '').trim();
@@ -439,10 +452,11 @@
         var queries = [];
         if (orig) queries.push(orig);
         if (loc && loc !== orig) queries.push(loc);
-        if (!queries.length) return callback(emptyData());
+        if (!queries.length) return callback(emptyData(), false);
 
-        // Сходинки: спершу точний запит як у Lampa, далі — простіші.
-        // Деякі збірки Jackett на повний набір параметрів віддають порожньо.
+        // Повний запит (як у Lampa) — основний і найшвидший для балансера.
+        // Спрощені варіанти пробуємо ЛИШЕ якщо сервер відповів, але порожньо.
+        // Після помилки/таймауту не довантажуємо сервер повторами.
         var tasks = [];
         for (var l = 0; l < links.length; l++) {
             tasks.push({ link: links[l], query: queries[0], mode: 'full' });
@@ -450,18 +464,27 @@
             if (queries[1]) tasks.push({ link: links[l], query: queries[1], mode: 'plain' });
         }
 
+        var anyResponse = false;
+
         function step(i) {
-            if (i >= tasks.length) return callback(emptyData());
+            if (i >= tasks.length) return callback(emptyData(), !anyResponse);
 
             requestParser(tasks[i].link, movie, tasks[i].query, tasks[i].mode, function (err, json) {
-                if (err) return step(i + 1);
+                if (err) {
+                    // сервер не відповів — далі не мучимо його цим фільмом
+                    log('немає відповіді:', tasks[i].query, tasks[i].mode);
+                    return callback(emptyData(), !anyResponse);
+                }
+
+                anyResponse = true;
 
                 var items = parseResults(json);
                 log('роздач:', items.length, '| запит:', tasks[i].query, '| режим:', tasks[i].mode);
-                if (!items.length) return step(i + 1);
 
-                var data = analyze(items, movie);
-                if (!data.empty) return callback(data);
+                if (items.length) {
+                    var data = analyze(items, movie);
+                    if (!data.empty) return callback(data, false);
+                }
 
                 step(i + 1);
             });
@@ -480,7 +503,8 @@
         if (!links.length) return console.log('[MARKS-UA] парсер не налаштовано');
 
         var fake = { id: 0, title: query, original_title: query, release_date: (year || '') + '' };
-        var url = buildUrl(links[0], fake, query, 'plain');
+        var url = buildUrl(links[0], fake, query, year ? 'full' : 'plain');
+        console.log('[MARKS-UA] джерело:', links[0].url, '| ключ:', links[0].key);
         console.log('[MARKS-UA] запит:', url);
 
         var req = new Lampa.Reguest();
@@ -520,8 +544,10 @@
 
     function runTask(task) {
         active++;
-        searchMovie(task.movie, function (data) {
-            setCache(task.key, data);
+        searchMovie(task.movie, function (data, failed) {
+            // невдалий запит кешуємо лише на 10 хвилин, щоб картка не лишалась
+            // без бейджів на пів доби через один таймаут сервера
+            setCache(task.key, data, failed ? CACHE_FAIL_TIME : CACHE_TIME);
 
             var cbs = pending[task.key] || [];
             delete pending[task.key];
@@ -530,7 +556,7 @@
             }
 
             active--;
-            pump();
+            setTimeout(pump, REQUEST_GAP);
         });
     }
 
@@ -769,6 +795,38 @@
             field: {
                 name: 'Тільки українські трекери',
                 description: 'Якість рахується лише за роздачами з toloka, mazepa, hurtom тощо'
+            },
+            onChange: function () { clearCache(); refresh(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_parser_url',
+                type: 'input',
+                values: '',
+                placeholder: 'spawnum.duckdns.org:59117',
+                default: ''
+            },
+            field: {
+                name: 'Своя адреса парсера',
+                description: 'Порожньо — брати парсер із налаштувань Lampa'
+            },
+            onChange: function () { clearCache(); refresh(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_parser_key',
+                type: 'input',
+                values: '',
+                placeholder: '2',
+                default: ''
+            },
+            field: {
+                name: 'API ключ свого парсера',
+                description: 'Потрібен разом зі своєю адресою'
             },
             onChange: function () { clearCache(); refresh(); }
         });
