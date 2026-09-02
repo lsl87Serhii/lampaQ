@@ -138,29 +138,32 @@
      *  ЗАПИТ ДО ПАРСЕРА (Jackett / Spawn)
      * ------------------------------------------------------------------ */
 
-    function buildUrl(link, movie, query) {
+    // mode 'full'  — як робить сама Lampa: title + title_original + year + is_serial
+    // mode 'plain' — лише Query, коли сервер на повний набір нічого не віддав
+    function buildUrl(link, movie, query, mode) {
         var interview = sfield('jackett_interview', 'all') === 'healthy' ? 'status:healthy' : 'all';
 
         var url = link.url + '/api/v2.0/indexers/' + interview + '/results' +
             '?apikey=' + encodeURIComponent(link.key) +
             '&Query=' + encodeURIComponent(query);
 
+        if (mode !== 'full') return url;
+
         var title = String(movie.title || movie.name || '');
         var orig = String(movie.original_title || movie.original_name || '');
         var year = movieYear(movie);
-        var isSerial = (movie.original_name || movie.name || movie.first_air_date) ? '2' : '1';
+        var isSerial = (movie.original_name || movie.first_air_date || movie.number_of_seasons) ? '2' : '1';
 
         if (title) url += '&title=' + encodeURIComponent(title);
         if (orig) url += '&title_original=' + encodeURIComponent(orig);
         if (year) url += '&year=' + year;
         url += '&is_serial=' + isSerial;
-        url += '&Category[]=' + (isSerial === '2' ? 5000 : 2000);
 
         return url;
     }
 
-    function requestParser(link, movie, query, callback) {
-        var url = buildUrl(link, movie, query);
+    function requestParser(link, movie, query, mode, callback) {
+        var url = buildUrl(link, movie, query, mode);
         log('запит', url);
 
         try {
@@ -438,21 +441,23 @@
         if (loc && loc !== orig) queries.push(loc);
         if (!queries.length) return callback(emptyData());
 
+        // Сходинки: спершу точний запит як у Lampa, далі — простіші.
+        // Деякі збірки Jackett на повний набір параметрів віддають порожньо.
         var tasks = [];
         for (var l = 0; l < links.length; l++) {
-            for (var q = 0; q < queries.length; q++) {
-                tasks.push({ link: links[l], query: queries[q] });
-            }
+            tasks.push({ link: links[l], query: queries[0], mode: 'full' });
+            tasks.push({ link: links[l], query: queries[0], mode: 'plain' });
+            if (queries[1]) tasks.push({ link: links[l], query: queries[1], mode: 'plain' });
         }
 
         function step(i) {
             if (i >= tasks.length) return callback(emptyData());
 
-            requestParser(tasks[i].link, movie, tasks[i].query, function (err, json) {
+            requestParser(tasks[i].link, movie, tasks[i].query, tasks[i].mode, function (err, json) {
                 if (err) return step(i + 1);
 
                 var items = parseResults(json);
-                log('знайдено роздач:', items.length, 'запит:', tasks[i].query);
+                log('роздач:', items.length, '| запит:', tasks[i].query, '| режим:', tasks[i].mode);
                 if (!items.length) return step(i + 1);
 
                 var data = analyze(items, movie);
@@ -463,6 +468,46 @@
         }
 
         step(0);
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  ДІАГНОСТИКА
+     *  У консолі: MARKS_UA_TEST('Обсесія')
+     * ------------------------------------------------------------------ */
+
+    function debugSearch(query, year) {
+        var links = getParserLinks();
+        if (!links.length) return console.log('[MARKS-UA] парсер не налаштовано');
+
+        var fake = { id: 0, title: query, original_title: query, release_date: (year || '') + '' };
+        var url = buildUrl(links[0], fake, query, 'plain');
+        console.log('[MARKS-UA] запит:', url);
+
+        var req = new Lampa.Reguest();
+        req.timeout(parserTimeout());
+        req.silent(url, function (json) {
+            var items = parseResults(json);
+            console.log('[MARKS-UA] отримано роздач:', items.length);
+
+            var trackers = {};
+            items.forEach(function (item) {
+                var title = String(item.Title || item.title || '');
+                var tr = trackerName(item) || '(без трекера)';
+                trackers[tr] = (trackers[tr] || 0) + 1;
+
+                console.log(
+                    (isUaTracker(item) ? 'UA ' : '-- ') +
+                    (detectResolution(item) || '???').padEnd(4) + ' | ' +
+                    'роки: ' + JSON.stringify(torrentYears(title)) + ' | ' +
+                    'частина: ' + torrentPartNumber(title) + ' | ' +
+                    tr + ' | ' + title
+                );
+            });
+
+            console.log('[MARKS-UA] трекери у відповіді:', trackers);
+        }, function (e) {
+            console.log('[MARKS-UA] помилка запиту:', e);
+        });
     }
 
     /* ------------------------------------------------------------------ *
@@ -747,6 +792,9 @@
     function runInit() {
         setupSettings();
         injectStyle();
+
+        window.MARKS_UA_TEST = debugSearch;
+        window.MARKS_UA_CLEAR = clearCache;
 
         document.body.classList.toggle('marks-ua-on', isSettingEnabled('marks_enabled', true));
 
