@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v2) return;
-    window.marks_quality_merged_v2 = true;
+    if (window.marks_quality_merged_v4) return;
+    window.marks_quality_merged_v4 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -10,19 +10,17 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  CONFIG
+     *  CONFIG & CACHE
      * ------------------------------------------------------------------ */
 
     var LOG = false;
-    var DEFAULT_JACRED = 'jr.maxvol.pro';
-    var CACHE_KEY = 'marks_quality_cache_v2';
-    var CACHE_TIME = 24 * 60 * 60 * 1000;              // 24 години
-    var CACHE_LIMIT = 800;                             // Максимум записів у кеші
-    var REQ_TIMEOUT = 6000;                            // Таймаут запиту (мс)
-    var MAX_PARALLEL = 3;                              // Паралельні запити
+    var CACHE_KEY = 'marks_quality_cache_v4';
+    var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
+    var CACHE_LIMIT = 800;
+    var REQ_TIMEOUT = 5000;
+    var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
-    // Джерела та теги для ідентифікації українського контенту
     var UA_TRACKERS = ['toloka', 'toloka.to', 'mazepa', 'hurtom', 'uafilm', 'baibako', 'ua-tracker', 'mova'];
 
     var memCache = {};
@@ -35,25 +33,8 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  SETTINGS HELPERS
+     *  DYNAMIC HOST DETECTION FROM LAMPA STORAGE
      * ------------------------------------------------------------------ */
-
-    function normalizeSettingBoolean(val, defaultVal) {
-        if (val === undefined || val === null || val === '') return !!defaultVal;
-        if (typeof val === 'boolean') return val;
-        if (typeof val === 'number') return val !== 0;
-        if (typeof val === 'string') {
-            var t = val.trim().toLowerCase();
-            if (!t) return !!defaultVal;
-            if (t === 'false' || t === '0' || t === 'off' || t === 'no' || t === 'none' || t === 'disabled') return false;
-            if (t === 'true' || t === '1' || t === 'on' || t === 'yes' || t === 'enabled') return true;
-        }
-        return !!val;
-    }
-
-    function isSettingEnabled(key, defaultVal) {
-        return normalizeSettingBoolean(Lampa.Storage.get(key, defaultVal), defaultVal);
-    }
 
     function normalizeHost(raw) {
         raw = String(raw || '').trim();
@@ -65,41 +46,63 @@
         return raw ? (proto + raw) : '';
     }
 
-    function detectParserHost() {
-        var keys = ['jackett_url', 'jacred_url', 'parser_torrent_url', 'jackett_urltwo'];
+    function isSettingEnabled(key, defaultVal) {
+        var val = Lampa.Storage.get(key, defaultVal);
+        if (val === undefined || val === null || val === '') return !!defaultVal;
+        if (typeof val === 'boolean') return val;
+        if (typeof val === 'string') {
+            var t = val.trim().toLowerCase();
+            if (t === 'false' || t === '0' || t === 'off' || t === 'no' || t === 'disabled') return false;
+            if (t === 'true' || t === '1' || t === 'on' || t === 'yes' || t === 'enabled') return true;
+        }
+        return !!val;
+    }
+
+    function getActiveParserHosts() {
+        var list = [];
+
+        // Перевіряємо ручне налаштування плагіна (якщо вказано)
+        var customSetting = String(Lampa.Storage.get('marks_jacred_url', '') || '').trim();
+        if (customSetting && customSetting.toLowerCase() !== 'auto') {
+            var manual = normalizeHost(customSetting);
+            if (manual) list.push(manual);
+        }
+
+        // Динамічно читаємо всі ключі, якими Lampa та її модулі зберігають адреси парсерів
+        var keys = [
+            'lampaua_url',
+            'spawnua_url',
+            'jackett_url',
+            'jacred_url',
+            'parser_torrent_url',
+            'jackett_urltwo',
+            'parser_url'
+        ];
+
         for (var i = 0; i < keys.length; i++) {
             var v = Lampa.Storage.get(keys[i], '');
             if (v && typeof v === 'string' && v.trim()) {
                 var host = normalizeHost(v);
-                if (host) return host;
+                if (host && list.indexOf(host) === -1) list.push(host);
             }
         }
-        return '';
-    }
 
-    function jacredHosts() {
-        var setting = String(Lampa.Storage.get('marks_jacred_url', 'auto') || 'auto').trim();
-        var list = [];
-
-        if (!setting || setting.toLowerCase() === 'auto') {
-            var detected = detectParserHost();
-            if (detected) list.push(detected);
-        } else {
-            var manual = normalizeHost(setting);
-            if (manual) list.push(manual);
+        // Перевірка через глобальний об'єкт Lampa.Parser
+        if (typeof Lampa.Parser !== 'undefined') {
+            try {
+                var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
+                if (pUrl) {
+                    var normPUrl = normalizeHost(pUrl);
+                    if (normPUrl && list.indexOf(normPUrl) === -1) list.push(normPUrl);
+                }
+            } catch (e) {}
         }
 
-        if (isSettingEnabled('marks_jacred_fallback', true)) {
-            var fb = normalizeHost(DEFAULT_JACRED);
-            if (list.indexOf(fb) === -1) list.push(fb);
-        }
-
-        if (!list.length) list.push(normalizeHost(DEFAULT_JACRED));
         return list;
     }
 
     /* ------------------------------------------------------------------ *
-     *  CACHE
+     *  CACHE MANAGEMENT
      * ------------------------------------------------------------------ */
 
     function readStore() {
@@ -138,7 +141,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  NETWORK (Lampa.Reguest)
+     *  NETWORK (LAMPA NATIVE REQUEST)
      * ------------------------------------------------------------------ */
 
     function fetchUrl(url, callback) {
@@ -146,13 +149,9 @@
             var network = new Lampa.Reguest();
             network.timeout(REQ_TIMEOUT);
             network.silent(url, function (res) {
-                if (typeof res === 'object') {
-                    callback(null, JSON.stringify(res));
-                } else if (typeof res === 'string') {
-                    callback(null, res);
-                } else {
-                    callback(new Error('Empty response'));
-                }
+                if (typeof res === 'object') callback(null, JSON.stringify(res));
+                else if (typeof res === 'string') callback(null, res);
+                else callback(new Error('Empty response'));
             }, function (err) {
                 callback(err || new Error('Request failed'));
             });
@@ -162,7 +161,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  DATA MODEL & PARSING
+     *  TORRENT PARSING & MATCHING
      * ------------------------------------------------------------------ */
 
     function emptyMarksData() {
@@ -188,8 +187,6 @@
 
     function isUaRelease(item) {
         if (!item) return false;
-
-        // 1. Перевірка імені трекера чи URL
         var fields = [item.trackerName, item.tracker, item.Tracker, item.url, item.Details];
         for (var i = 0; i < fields.length; i++) {
             var v = String(fields[i] || '').toLowerCase();
@@ -198,20 +195,12 @@
                 if (v.indexOf(UA_TRACKERS[j]) >= 0) return true;
             }
         }
-
-        // 2. Аналіз назви на наявність позначок українського перекладу/озвучки
         var t = String(item.title || '').toLowerCase();
-        if (/(^|[\s\.\_\-\[\(\/])(ukr|ua|ukrainian|укр|українськ|украинск)([\s\.\_\-\]\)\/]|$)/i.test(t)) {
-            return true;
-        }
-
-        return false;
+        return /(^|[\s\.\_\-\[\(\/])(ukr|ua|ukrainian|укр|українськ)([\s\.\_\-\]\)\/]|$)/i.test(t);
     }
 
     function detectResolution(item) {
         var t = String(item && item.title || '').toLowerCase();
-
-        // Межі слів з урахуванням кирилиці
         var b = '(?:^|[^a-z0-9а-яіїєґ])';
         var e = '(?:[^a-z0-9а-яіїєґ]|$)';
 
@@ -219,15 +208,13 @@
         if (new RegExp(b + '(1440[pi]?|2k)' + e, 'i').test(t)) return '2K';
         if (new RegExp(b + '(1080[pi]?|fhd|full ?hd)' + e, 'i').test(t)) return 'FHD';
         if (new RegExp(b + '(720[pi]?|hdrip|hdtv)' + e, 'i').test(t)) return 'HD';
-        if (new RegExp(b + '(480[pi]?|360[pi]?|sd|dvdrip|vhsrip|dvdscr)' + e, 'i').test(t)) return 'SD';
+        if (new RegExp(b + '(480[pi]?|360[pi]?|sd|dvdrip|vhsrip)' + e, 'i').test(t)) return 'SD';
 
         var q = parseInt(item && item.quality, 10) || 0;
         if (q >= 2160) return '4K';
         if (q >= 1440) return '2K';
         if (q >= 1080) return 'FHD';
         if (q >= 720) return 'HD';
-        if (q > 0) return 'SD';
-
         return '';
     }
 
@@ -253,12 +240,9 @@
             }
 
             var t = String(item && item.title || '').toLowerCase();
-
-            // Ігноруємо екранки
-            if (/(^|[^a-zа-яіїєґ])(ts|telesync|camrip|cam|tc|telecine|screener)([^a-zа-яіїєґ]|$)/i.test(t)) return;
+            if (/(^|[^a-zа-яіїєґ])(ts|telesync|camrip|cam|tc|screener)([^a-zа-яіїєґ]|$)/i.test(t)) return;
 
             found = true;
-
             if (/(^|[^a-z])(eng|english|multi)([^a-z]|$)/i.test(t)) best.eng = true;
 
             var res = detectResolution(item);
@@ -266,7 +250,6 @@
 
             if (RES_ORDER.indexOf(res) > RES_ORDER.indexOf(bestRes)) {
                 bestRes = res;
-
                 var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t);
                 var videoType = String(item && item.videotype || '').toLowerCase();
                 best.dolbyVision = isDv;
@@ -275,7 +258,6 @@
         });
 
         if (!found) return emptyMarksData();
-
         best.resolution = bestRes || 'SD';
         best.ukr = true;
         best.empty = false;
@@ -283,7 +265,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  JACRED SEARCH
+     *  SEARCH PROCESSOR
      * ------------------------------------------------------------------ */
 
     function buildJacredUrl(host, title, year, uid) {
@@ -300,22 +282,23 @@
 
         var uid = Lampa.Storage.get('lampac_unic_id', '');
         var titles = [];
-        var orig = (movie.original_title || movie.original_name || '').trim();
         var loc = (movie.title || movie.name || '').trim();
+        var orig = (movie.original_title || movie.original_name || '').trim();
 
-        if (orig && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
-        if (loc && loc !== orig && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        // Спочатку шукаємо за українською назвою
+        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
+        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
 
         if (!titles.length) return callback(emptyMarksData());
 
-        var hosts = jacredHosts();
+        var hosts = getActiveParserHosts();
+        if (!hosts.length) return callback(emptyMarksData());
+
         var tasks = [];
 
         for (var h = 0; h < hosts.length; h++) {
             for (var t = 0; t < titles.length; t++) {
-                if (yearNum) {
-                    tasks.push({ host: hosts[h], title: titles[t], year: yearStr });
-                }
+                if (yearNum) tasks.push({ host: hosts[h], title: titles[t], year: yearStr });
                 tasks.push({ host: hosts[h], title: titles[t], year: '' });
             }
         }
@@ -345,39 +328,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  UAFIX FALLBACK
-     * ------------------------------------------------------------------ */
-
-    function checkUafixBandera(movie, callback) {
-        var title = movie.title || movie.name || '';
-        var origTitle = movie.original_title || movie.original_name || '';
-        var imdbId = movie.imdb_id || '';
-        var type = movie.name ? 'series' : 'movie';
-
-        var url = 'https://banderabackend.lampame.v6.rocks/api/v2/search?source=uaflix';
-        if (title) url += '&title=' + encodeURIComponent(title);
-        if (origTitle) url += '&original_title=' + encodeURIComponent(origTitle);
-        if (imdbId) url += '&imdb_id=' + encodeURIComponent(imdbId);
-        url += '&type=' + type;
-
-        try {
-            var network = new Lampa.Reguest();
-            network.timeout(4000);
-            network.silent(url, function (json) {
-                callback(Boolean(json && json.ok && json.items && json.items.length > 0));
-            }, function () { callback(null); });
-        } catch (e) { callback(null); }
-    }
-
-    function checkUafix(movie, callback) {
-        if (!isSettingEnabled('marks_uafix', false)) return callback(false);
-        checkUafixBandera(movie, function (result) {
-            callback(Boolean(result));
-        });
-    }
-
-    /* ------------------------------------------------------------------ *
-     *  RESOLVE & QUEUE
+     *  QUEUE & RENDERING
      * ------------------------------------------------------------------ */
 
     function pump() {
@@ -402,18 +353,7 @@
             pump();
         }
 
-        jacredSearch(task.movie, function (data) {
-            var res = data || emptyMarksData();
-            if (!res.ukr) {
-                checkUafix(task.movie, function (hasUafix) {
-                    if (hasUafix) {
-                        res.empty = false;
-                        res.ukr = true;
-                    }
-                    finish(res);
-                });
-            } else finish(res);
-        });
+        jacredSearch(task.movie, finish);
     }
 
     function resolveMarks(movie, callback) {
@@ -431,19 +371,10 @@
         pump();
     }
 
-    /* ------------------------------------------------------------------ *
-     *  RENDER
-     * ------------------------------------------------------------------ */
-
     function getMovieFromCard(cardNode) {
         if (!cardNode) return null;
         var card = $(cardNode);
-        return cardNode.heroMovieData ||
-               cardNode.card_data ||
-               card.data('item') ||
-               cardNode.item ||
-               cardNode.data ||
-               null;
+        return cardNode.heroMovieData || cardNode.card_data || card.data('item') || cardNode.item || cardNode.data || null;
     }
 
     function extractRating(movie) {
@@ -575,82 +506,6 @@
         });
     }
 
-    function renderFullBadges(container, data, movie) {
-        container.empty();
-        if (!isSettingEnabled('marks_enabled', true)) {
-            container.remove();
-            return;
-        }
-
-        if (data.ukr && isSettingEnabled('marks_ua', true)) {
-            container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--ua">UA+</div>');
-        }
-
-        if (data.resolution && data.resolution !== 'SD') {
-            var resText = data.resolution;
-            if (resText === 'FHD') resText = '1080p';
-            else if (resText === 'HD') resText = '720p';
-
-            var showQuality = false;
-            if (data.resolution === '4K' && isSettingEnabled('marks_4k', true)) showQuality = true;
-            else if ((data.resolution === 'FHD' || data.resolution === 'HD') && isSettingEnabled('marks_fhd', true)) showQuality = true;
-
-            if (showQuality) {
-                container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--quality">' + resText + '</div>');
-            }
-        }
-
-        if (data.hdr && isSettingEnabled('marks_hdr', true)) {
-            container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--hdr">' + (data.dolbyVision ? 'Dolby Vision' : 'HDR') + '</div>');
-        }
-
-        if (isSettingEnabled('marks_rating', true)) {
-            var rating = extractRating(movie);
-            if (rating > 0 && String(rating) !== '0.0') {
-                container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--rating">&#9733;' + rating.toFixed(1) + '</div>');
-            }
-        }
-
-        if (isSettingEnabled('marks_year', true)) {
-            var fullYear = extractYear(movie);
-            if (fullYear) {
-                container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--year">' + fullYear + '</div>');
-            }
-        }
-    }
-
-    function injectFullCardMarks(movie, renderEl) {
-        if (!movie || !renderEl) return;
-
-        var $render = $(renderEl);
-        if ($render.is('.applecation') || $render.find('.applecation').length) return;
-        if ($('.quality-badges-container').length) return;
-
-        var poster = $render.find('.full-start__poster, .full-start-new__poster').first();
-        if (poster.length) {
-            if ($render.find('.likhtar-marks-full').length) return;
-            poster.css('position', 'relative');
-            var posterBadges = $('<div class="likhtar-marks-full"></div>');
-            poster.append(posterBadges);
-
-            renderFullBadges(posterBadges, emptyMarksData(), movie);
-            resolveMarks(movie, function (bestData) { renderFullBadges(posterBadges, bestData, movie); });
-        } else {
-            var rateLine = $render.find('.full-start-new__rate-line, .full-start__rate-line').first();
-            if (!rateLine.length) return;
-            if ($render.find('.likhtar-marks-row').length) return;
-
-            var qualityRow = $('<div class="likhtar-marks-row"></div>');
-            rateLine.append(qualityRow);
-            renderFullBadges(qualityRow, emptyMarksData(), movie);
-            resolveMarks(movie, function (bestData) { renderFullBadges(qualityRow, bestData, movie); });
-        }
-    }
-
-    /* ------------------------------------------------------------------ *
-     *  OBSERVERS
-     * ------------------------------------------------------------------ */
-
     function initCardObserver() {
         var queued = false;
         var pendingRoots = [];
@@ -684,96 +539,11 @@
         setTimeout(processCards, 500);
     }
 
-    function initFullCardObserver() {
-        if (!Lampa.Listener || !Lampa.Listener.follow) return;
-
-        Lampa.Listener.follow('full', function (e) {
-            if (e.type !== 'complite') return;
-            var movie = e.data && e.data.movie;
-            var renderEl = e.object && e.object.activity && e.object.activity.render && e.object.activity.render();
-            injectFullCardMarks(movie, renderEl);
-        });
-    }
-
-    function refreshAllMarks() {
-        try {
-            $('.likhtar-marks-container, .likhtar-marks-full, .likhtar-marks-row').remove();
-            $('.card').removeClass('likhtar-marks-processed likhtar-marks-active likhtar-marks-has-custom-rating');
-        } catch (e) { }
-
-        if (!isSettingEnabled('marks_enabled', true)) return;
-        try { processCards(); } catch (e2) { }
-    }
-
-    /* ------------------------------------------------------------------ *
-     *  SETTINGS & STYLES
-     * ------------------------------------------------------------------ */
-
-    function setupSettings() {
-        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
-        if (window.marks_quality_settings_added) return;
-        window.marks_quality_settings_added = true;
-
-        var component = 'interface';
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { type: 'title' },
-            field: { name: 'Мітки якості та перекладу' }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_enabled', type: 'trigger', default: true },
-            field: { name: 'Увімкнути модуль міток' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_ua', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку UA' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_4k', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку 4K' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_fhd', type: 'trigger', default: true },
-            field: { name: 'Показувати мітки 1080p / 720p' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_rating', type: 'trigger', default: true },
-            field: { name: 'Показувати мітку рейтингу' },
-            onChange: function () { setTimeout(refreshAllMarks, 50); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: component,
-            param: { name: 'marks_cache_clear', type: 'button' },
-            field: { name: 'Очистити кеш міток', description: 'Скинути сохранені дані про якість' },
-            onChange: function () {
-                clearCache();
-                if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено');
-                refreshAllMarks();
-            }
-        });
-    }
-
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v2')) return;
+        if (document.getElementById('likhtar-marks-style-v4')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v2';
+        style.id = 'likhtar-marks-style-v4';
         style.innerHTML = '\
             .likhtar-marks-container {\
                 position: absolute;\
@@ -809,43 +579,20 @@
             .likhtar-marks-star { margin-right: 0.15em; }\
             .card.likhtar-marks-active .card__type,\
             .card.likhtar-marks-active .card__quality { display: none !important; }\
-            .likhtar-marks-full {\
-                position: absolute;\
-                top: 0.8em;\
-                right: 0.4em;\
-                display: flex;\
-                flex-direction: column;\
-                gap: 0.3em;\
-                z-index: 20;\
-            }\
-            .likhtar-marks-full-badge {\
-                padding: 0.3em 0.5em;\
-                border-radius: 0.3em;\
-                font-size: 0.8em;\
-                font-weight: 800;\
-                color: #fff;\
-                box-shadow: 0 2px 6px rgba(0,0,0,0.4);\
-            }\
-            .likhtar-marks-full-badge--ua { background: linear-gradient(135deg, #1565c0, #42a5f5); }\
-            .likhtar-marks-full-badge--quality { background: linear-gradient(135deg, #2e7d32, #66bb6a); }\
-            .likhtar-marks-full-badge--hdr { background: linear-gradient(135deg, #512da8, #ab47bc); }\
         ';
 
         document.head.appendChild(style);
     }
 
     /* ------------------------------------------------------------------ *
-     *  INIT
+     *  INIT & AUTOMATIC CLEAR ON UPDATE
      * ------------------------------------------------------------------ */
 
     function runInit() {
-        setupSettings();
+        clearCache();
         injectStyle();
-        window.MARKS_REFRESH = refreshAllMarks;
-        window.MARKS_CLEAR_CACHE = clearCache;
         initCardObserver();
-        initFullCardObserver();
-        setTimeout(refreshAllMarks, 100);
+        processCards();
     }
 
     if (window.appready) runInit();
