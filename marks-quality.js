@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v4) return;
-    window.marks_quality_merged_v4 = true;
+    if (window.marks_quality_merged_v5) return;
+    window.marks_quality_merged_v5 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -14,10 +14,11 @@
      * ------------------------------------------------------------------ */
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v4';
+    var DEFAULT_JACRED = 'jr.maxvol.pro';
+    var CACHE_KEY = 'marks_quality_cache_v5';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
-    var REQ_TIMEOUT = 5000;
+    var REQ_TIMEOUT = 6000;
     var MAX_PARALLEL = 3;
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
@@ -33,7 +34,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  DYNAMIC HOST DETECTION FROM LAMPA STORAGE
+     *  HELPERS & HOST DETECTION
      * ------------------------------------------------------------------ */
 
     function normalizeHost(raw) {
@@ -46,10 +47,10 @@
         return raw ? (proto + raw) : '';
     }
 
-    function isSettingEnabled(key, defaultVal) {
-        var val = Lampa.Storage.get(key, defaultVal);
+    function normalizeSettingBoolean(val, defaultVal) {
         if (val === undefined || val === null || val === '') return !!defaultVal;
         if (typeof val === 'boolean') return val;
+        if (typeof val === 'number') return val !== 0;
         if (typeof val === 'string') {
             var t = val.trim().toLowerCase();
             if (t === 'false' || t === '0' || t === 'off' || t === 'no' || t === 'disabled') return false;
@@ -58,17 +59,21 @@
         return !!val;
     }
 
+    function isSettingEnabled(key, defaultVal) {
+        return normalizeSettingBoolean(Lampa.Storage.get(key, defaultVal), defaultVal);
+    }
+
     function getActiveParserHosts() {
         var list = [];
 
-        // Перевіряємо ручне налаштування плагіна (якщо вказано)
-        var customSetting = String(Lampa.Storage.get('marks_jacred_url', '') || '').trim();
+        // 1. Ручна адреса з налаштувань плагіна (якщо введено)
+        var customSetting = String(Lampa.Storage.get('marks_jacred_url', 'auto') || 'auto').trim();
         if (customSetting && customSetting.toLowerCase() !== 'auto') {
             var manual = normalizeHost(customSetting);
             if (manual) list.push(manual);
         }
 
-        // Динамічно читаємо всі ключі, якими Lampa та її модулі зберігають адреси парсерів
+        // 2. Зчитування ключів Lampa Storage
         var keys = [
             'lampaua_url',
             'spawnua_url',
@@ -87,7 +92,7 @@
             }
         }
 
-        // Перевірка через глобальний об'єкт Lampa.Parser
+        // 3. Зчитування з Lampa.Parser
         if (typeof Lampa.Parser !== 'undefined') {
             try {
                 var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
@@ -96,6 +101,12 @@
                     if (normPUrl && list.indexOf(normPUrl) === -1) list.push(normPUrl);
                 }
             } catch (e) {}
+        }
+
+        // 4. Резервне джерело за замовчуванням
+        if (!list.length) {
+            var fb = normalizeHost(DEFAULT_JACRED);
+            if (fb) list.push(fb);
         }
 
         return list;
@@ -141,7 +152,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  NETWORK (LAMPA NATIVE REQUEST)
+     *  NETWORK
      * ------------------------------------------------------------------ */
 
     function fetchUrl(url, callback) {
@@ -285,7 +296,6 @@
         var loc = (movie.title || movie.name || '').trim();
         var orig = (movie.original_title || movie.original_name || '').trim();
 
-        // Спочатку шукаємо за українською назвою
         if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
         if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
 
@@ -506,6 +516,96 @@
         });
     }
 
+    function refreshAllMarks() {
+        try {
+            $('.likhtar-marks-container, .likhtar-marks-full, .likhtar-marks-row').remove();
+            $('.card').removeClass('likhtar-marks-processed likhtar-marks-active likhtar-marks-has-custom-rating');
+        } catch (e) { }
+
+        if (!isSettingEnabled('marks_enabled', true)) return;
+        try { processCards(); } catch (e2) { }
+    }
+
+    /* ------------------------------------------------------------------ *
+     *  SETTINGS & STYLES
+     * ------------------------------------------------------------------ */
+
+    function setupSettings() {
+        if (!Lampa.SettingsApi || !Lampa.SettingsApi.addParam) return;
+        if (window.marks_quality_settings_added) return;
+        window.marks_quality_settings_added = true;
+
+        var component = 'interface';
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { type: 'title' },
+            field: { name: 'Мітки якості (Marks)' }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_enabled', type: 'trigger', default: true },
+            field: { name: 'Увімкнути модуль міток' },
+            onChange: function () { setTimeout(refreshAllMarks, 50); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_ua', type: 'trigger', default: true },
+            field: { name: 'Показувати мітку UA' },
+            onChange: function () { setTimeout(refreshAllMarks, 50); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_4k', type: 'trigger', default: true },
+            field: { name: 'Показувати мітку 4K' },
+            onChange: function () { setTimeout(refreshAllMarks, 50); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_fhd', type: 'trigger', default: true },
+            field: { name: 'Показувати мітки 1080p / 720p' },
+            onChange: function () { setTimeout(refreshAllMarks, 50); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_rating', type: 'trigger', default: true },
+            field: { name: 'Показувати мітку рейтингу' },
+            onChange: function () { setTimeout(refreshAllMarks, 50); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_jacred_url',
+                type: 'input',
+                values: '',
+                placeholder: 'auto',
+                default: 'auto'
+            },
+            field: {
+                name: 'Джерело якості',
+                description: '«auto» — читати адрес з налаштувань парсера Lampa, або введіть адрес вручну'
+            },
+            onChange: function () { clearCache(); refreshAllMarks(); }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_cache_clear', type: 'button' },
+            field: { name: 'Очистити кеш міток', description: 'Скинути сохранені дані про якість' },
+            onChange: function () {
+                clearCache();
+                if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено');
+                refreshAllMarks();
+            }
+        });
+    }
+
     function initCardObserver() {
         var queued = false;
         var pendingRoots = [];
@@ -540,10 +640,10 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v4')) return;
+        if (document.getElementById('likhtar-marks-style-v5')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v4';
+        style.id = 'likhtar-marks-style-v5';
         style.innerHTML = '\
             .likhtar-marks-container {\
                 position: absolute;\
@@ -585,10 +685,11 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  INIT & AUTOMATIC CLEAR ON UPDATE
+     *  INIT
      * ------------------------------------------------------------------ */
 
     function runInit() {
+        setupSettings();
         clearCache();
         injectStyle();
         initCardObserver();
