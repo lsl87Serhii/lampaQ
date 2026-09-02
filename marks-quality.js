@@ -22,6 +22,9 @@
     var MAX_PARALLEL = 3;                              // паралельних запитів до JacRed
     var RES_ORDER = ['SD', 'HD', 'FHD', '2K', '4K'];
 
+    // Якість рахується ВИКЛЮЧНО за релізами з цих трекерів
+    var UA_TRACKERS = ['toloka', 'mazepa'];
+
     var memCache = {};
     var pending = {};
     var queue = [];
@@ -201,69 +204,86 @@
         return [];
     }
 
+    // Реліз вважається українським лише якщо він з українського трекера.
+    // Друга лінія захисту: навіть якщо сервер проігнорує параметр tracker,
+    // сюди нічого російського не пройде.
+    function isUaRelease(item) {
+        var fields = [
+            item && item.trackerName,
+            item && item.tracker,
+            item && item.Tracker,
+            item && item.url,
+            item && item.Details
+        ];
+        for (var i = 0; i < fields.length; i++) {
+            var v = String(fields[i] || '').toLowerCase();
+            if (!v) continue;
+            for (var j = 0; j < UA_TRACKERS.length; j++) {
+                if (v.indexOf(UA_TRACKERS[j]) >= 0) return true;
+            }
+        }
+        return false;
+    }
+
+    // Роздільна визначається лише за явними ознаками.
+    // Немає ознаки — повертаємо '' (мітки не буде), а не вигадану 1080p.
+    function detectResolution(item) {
+        var t = String(item && item.title || '').toLowerCase();
+
+        // 1. явний токен у назві релізу — найнадійніше
+        if (/(^|[^0-9a-z])(2160[pi]?|4k|uhd)([^0-9a-z]|$)/.test(t)) return '4K';
+        if (/(^|[^0-9a-z])(1440[pi]?|2k)([^0-9a-z]|$)/.test(t)) return '2K';
+        if (/(^|[^0-9a-z])(1080[pi]?|fhd|full ?hd)([^0-9a-z]|$)/.test(t)) return 'FHD';
+        if (/(^|[^0-9a-z])(720[pi]?|hdrip|hdtv)([^0-9a-z]|$)/.test(t)) return 'HD';
+        if (/(^|[^0-9a-z])(480[pi]?|360[pi]?|sd|dvdrip|vhsrip|dvdscr)([^0-9a-z]|$)/.test(t)) return 'SD';
+
+        // 2. числове поле quality від JacRed
+        var q = parseInt(item && item.quality, 10) || 0;
+        if (q >= 2160) return '4K';
+        if (q >= 1440) return '2K';
+        if (q >= 1080) return 'FHD';
+        if (q >= 720) return 'HD';
+        if (q > 0) return 'SD';
+
+        return '';
+    }
+
     function analyzeTorrents(results, movie) {
-        var bestGlobal = emptyMarksData();
-        var bestUkr = emptyMarksData();
+        var best = emptyMarksData();
+        var bestRes = '';
         var found = false;
 
         results.forEach(function (item) {
+            if (!isUaRelease(item)) return;
+
             var t = String(item && item.title || '').toLowerCase();
-            var quality = parseInt(item && item.quality, 10) || 0;
 
-            // відсікаємо екранки, якщо вони не HD
-            if (/\b(ts|telesync|camrip|cam|ts-rip)\b/i.test(t) && quality < 720) return;
-
-            var currentRes = 'SD';
-            if (quality >= 2160 || t.indexOf('4k') >= 0 || t.indexOf('2160') >= 0 || t.indexOf('uhd') >= 0) currentRes = '4K';
-            else if (quality >= 1440 || t.indexOf('2k') >= 0 || t.indexOf('1440') >= 0) currentRes = '2K';
-            else if (quality >= 1080 || t.indexOf('1080') >= 0 || t.indexOf('fhd') >= 0 || t.indexOf('full hd') >= 0) currentRes = 'FHD';
-            else if (quality >= 720 || t.indexOf('720') >= 0 || t.indexOf('hd') >= 0) currentRes = 'HD';
+            // екранки не рахуємо взагалі
+            if (/(^|[^a-z])(ts|telesync|camrip|cam|tc|telecine|screener)([^a-z]|$)/.test(t)) return;
 
             found = true;
 
-            var isUkr = false, isEng = false, isHdr = false, isDv = false;
+            if (/(^|[^a-z])(eng|english|multi)([^a-z]|$)/.test(t)) best.eng = true;
 
-            var voice = String(item && (item.voices || item.voice) || '').toLowerCase();
-            if (/(^|[^a-z])(ukr|ua|ukrainian)([^a-z]|$)/i.test(t) || t.indexOf('укр') >= 0) isUkr = true;
-            if (voice.indexOf('укр') >= 0 || /(^|[^a-z])(ukr|ua)([^a-z]|$)/i.test(voice)) isUkr = true;
-            if (movie.original_language === 'uk') isUkr = true;
-            if (/(^|[^a-z])(eng|english|multi)([^a-z]|$)/i.test(t)) isEng = true;
+            var res = detectResolution(item);
+            if (!res) return;
 
-            var videoType = String(item && item.videotype || '').toLowerCase();
-            if (t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/i.test(t)) {
-                isHdr = true;
-                isDv = true;
-            } else if (videoType === 'hdr' || t.indexOf('hdr') >= 0) {
-                isHdr = true;
-            }
+            if (RES_ORDER.indexOf(res) > RES_ORDER.indexOf(bestRes)) {
+                bestRes = res;
 
-            if (RES_ORDER.indexOf(currentRes) > RES_ORDER.indexOf(bestGlobal.resolution)) {
-                bestGlobal.resolution = currentRes;
-                bestGlobal.hdr = isHdr;
-                bestGlobal.dolbyVision = isDv;
-            }
-            if (isEng) bestGlobal.eng = true;
-
-            if (isUkr) {
-                bestGlobal.ukr = true;
-                bestUkr.ukr = true;
-                if (RES_ORDER.indexOf(currentRes) > RES_ORDER.indexOf(bestUkr.resolution)) {
-                    bestUkr.resolution = currentRes;
-                    bestUkr.hdr = isHdr;
-                    bestUkr.dolbyVision = isDv;
-                }
-                if (isEng) bestUkr.eng = true;
+                var isDv = t.indexOf('dolby vision') >= 0 || t.indexOf('dolbyvision') >= 0 || /(^|[^a-z])dovi([^a-z]|$)/.test(t);
+                var videoType = String(item && item.videotype || '').toLowerCase();
+                best.dolbyVision = isDv;
+                best.hdr = isDv || videoType === 'hdr' || /(^|[^a-z])hdr(10)?(\+)?([^a-z]|$)/.test(t);
             }
         });
 
         if (!found) return emptyMarksData();
 
-        var final = bestGlobal.ukr ? bestUkr : bestGlobal;
-        final.ukr = bestGlobal.ukr;
-        final.eng = bestGlobal.eng || final.eng;
-        if (movie.original_language === 'en') final.eng = true;
-        final.empty = false;
-        return final;
+        best.resolution = bestRes || 'SD';
+        best.ukr = true;   // джерело — виключно українські трекери
+        best.empty = false;
+        return best;
     }
 
     /* ------------------------------------------------------------------ *
@@ -287,16 +307,23 @@
         if (!titles.length) return callback(emptyMarksData());
 
         var hosts = jacredHosts();
+        // Спершу просимо сервер віддати лише українські трекери (JacRed підтримує &tracker=).
+        // Якщо сервер старий і параметр ігнорує/не розуміє — повторюємо без нього,
+        // а зайве відсіється вже на клієнті.
         var combos = [];
         for (var h = 0; h < hosts.length; h++) {
-            for (var t = 0; t < titles.length; t++) combos.push({ host: hosts[h], title: titles[t] });
+            for (var t = 0; t < titles.length; t++) {
+                combos.push({ host: hosts[h], title: titles[t], filterTrackers: true });
+                combos.push({ host: hosts[h], title: titles[t], filterTrackers: false });
+            }
         }
 
         function attempt(i) {
             if (i >= combos.length) return callback(emptyMarksData());
             var c = combos[i];
             var url = c.host + '/api/v1.0/torrents?search=' + encodeURIComponent(c.title) +
-                '&year=' + year + '&exact=true&uid=' + encodeURIComponent(uid);
+                '&year=' + year + '&exact=true&uid=' + encodeURIComponent(uid) +
+                (c.filterTrackers ? '&tracker=' + encodeURIComponent(UA_TRACKERS.join(',')) : '');
             log('request', movie.id, url);
             fetchText(url, function (err, body) {
                 if (err || !body) return attempt(i + 1);
@@ -350,7 +377,7 @@
     }
 
     function checkUafix(movie, callback) {
-        if (!isSettingEnabled('marks_uafix', true)) return callback(false);
+        if (!isSettingEnabled('marks_uafix', false)) return callback(false);
         checkUafixBandera(movie, function (result) {
             if (result !== null) return callback(result);
             checkUafixDirect(movie, callback);
@@ -387,10 +414,11 @@
             var res = data || emptyMarksData();
             if (!res.ukr) {
                 checkUafix(task.movie, function (hasUafix) {
+                    // uafix підтверджує лише наявність українського озвучення,
+                    // роздільну звідти не беремо — інакше це вигадані дані
                     if (hasUafix) {
                         res.empty = false;
                         res.ukr = true;
-                        if (!res.resolution || res.resolution === 'SD' || res.resolution === 'HD') res.resolution = 'FHD';
                     }
                     finish(res);
                 });
@@ -430,6 +458,13 @@
             if (!isNaN(n) && n > 0) return n;
         }
         return 0;
+    }
+
+    function extractYear(movie) {
+        if (!movie) return '';
+        var raw = movie.release_date || movie.first_air_date || movie.year || '';
+        var year = String(raw).substr(0, 4);
+        return /^\d{4}$/.test(year) ? year : '';
     }
 
     function createCardBadge(cssClass, label) {
@@ -477,6 +512,11 @@
                 container.append(rBadge);
                 hasCustomRating = true;
             }
+        }
+
+        if (isSettingEnabled('marks_year', true)) {
+            var year = extractYear(movie);
+            if (year) container.append(createCardBadge('year', year));
         }
 
         if (cardRoot && cardRoot.length) {
@@ -571,6 +611,13 @@
             var rating = extractRating(movie);
             if (rating > 0 && String(rating) !== '0.0') {
                 container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--rating">&#9733;' + rating.toFixed(1) + '</div>');
+            }
+        }
+
+        if (isSettingEnabled('marks_year', true)) {
+            var fullYear = extractYear(movie);
+            if (fullYear) {
+                container.append('<div class="likhtar-marks-full-badge likhtar-marks-full-badge--year">' + fullYear + '</div>');
             }
         }
     }
@@ -692,7 +739,7 @@
         window.marks_quality_settings_added = true;
 
         var component = 'interface';
-        var migrateKey = 'marks_merged_migrated_v1';
+        var migrateKey = 'marks_merged_migrated_v2';
 
         if (!Lampa.Storage.get(migrateKey, false)) {
             Lampa.Storage.set('marks_enabled', true);
@@ -702,7 +749,8 @@
             Lampa.Storage.set('marks_fhd', true);
             Lampa.Storage.set('marks_hdr', true);
             Lampa.Storage.set('marks_rating', true);
-            Lampa.Storage.set('marks_uafix', true);
+            Lampa.Storage.set('marks_year', true);
+            Lampa.Storage.set('marks_uafix', false);
             Lampa.Storage.set('marks_jacred_fallback', true);
             if (!Lampa.Storage.get('marks_jacred_url', '')) Lampa.Storage.set('marks_jacred_url', 'auto');
             Lampa.Storage.set(migrateKey, true);
@@ -767,7 +815,14 @@
 
         Lampa.SettingsApi.addParam({
             component: component,
-            param: { name: 'marks_uafix', type: 'trigger', default: true },
+            param: { name: 'marks_year', type: 'trigger', default: true },
+            field: { name: 'Показувати мітку року' },
+            onChange: refresh
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: { name: 'marks_uafix', type: 'trigger', default: false },
             field: {
                 name: 'Додаткова перевірка UA (uafix)',
                 description: 'Вмикати, якщо мітка UA рідко зʼявляється. Сповільнює завантаження.'
@@ -777,7 +832,13 @@
 
         Lampa.SettingsApi.addParam({
             component: component,
-            param: { name: 'marks_jacred_url', type: 'input', default: 'auto' },
+            param: {
+                name: 'marks_jacred_url',
+                type: 'input',
+                values: '',
+                placeholder: 'auto',
+                default: 'auto'
+            },
             field: {
                 name: 'Джерело якості',
                 description: '«auto» — брати адресу з налаштувань торент-парсера LAMPA (LampaUA / SpawnUA / Jac.red). Або вписати адресу вручну.'
@@ -797,11 +858,10 @@
 
         Lampa.SettingsApi.addParam({
             component: component,
-            param: { name: 'marks_cache_clear', type: 'trigger', default: false },
-            field: { name: 'Очистити кеш міток', description: 'Увімкніть, щоб скинути збережені дані про якість' },
+            param: { name: 'marks_cache_clear', type: 'button' },
+            field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' },
             onChange: function () {
                 clearCache();
-                try { Lampa.Storage.set('marks_cache_clear', false); } catch (e) { }
                 if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш міток очищено');
                 refresh();
             }
@@ -856,6 +916,7 @@
             .likhtar-marks-badge--hd  { background: linear-gradient(135deg, #1b5e20, #66bb6a); border-color: rgba(102,187,106,0.4); }\
             .likhtar-marks-badge--hdr { background: linear-gradient(135deg, #f57f17, #ffeb3b); color: #000; border-color: rgba(255,235,59,0.4); }\
             .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; border-color: rgba(255,215,0,0.35); }\
+            .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); color: #fff; border-color: rgba(255,255,255,0.28); }\
             .likhtar-marks-star { margin-right: 0.16em; font-size: 0.92em; }\
             .card.likhtar-marks-active .card__type,\
             .card.likhtar-marks-active .card__quality { display: none !important; }\
@@ -894,6 +955,7 @@
             .likhtar-marks-full-badge--quality { background: linear-gradient(135deg, #2e7d32, #66bb6a); border-color: rgba(102,187,106,0.4); }\
             .likhtar-marks-full-badge--hdr { background: linear-gradient(135deg, #512da8, #ab47bc); border-color: rgba(171,71,188,0.4); }\
             .likhtar-marks-full-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; border-color: rgba(255,215,0,0.35); }\
+            .likhtar-marks-full-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); color: #fff; border-color: rgba(255,255,255,0.28); }\
         ';
 
         document.head.appendChild(style);
