@@ -1,8 +1,8 @@
 (function () {
     'use strict';
 
-    if (window.marks_quality_merged_v9) return;
-    window.marks_quality_merged_v9 = true;
+    if (window.marks_quality_merged_v10) return;
+    window.marks_quality_merged_v10 = true;
 
     if (typeof Lampa === 'undefined') {
         console.warn('Marks+Quality: Lampa not found');
@@ -15,7 +15,7 @@
 
     var LOG = false;
     var DEFAULT_HOST = 'http://jackettua.mooo.com';
-    var CACHE_KEY = 'marks_quality_cache_v9';
+    var CACHE_KEY = 'marks_quality_cache_v10';
     var CACHE_TIME = 12 * 60 * 60 * 1000;              // 12 годин
     var CACHE_LIMIT = 800;
     var REQ_TIMEOUT = 6000;
@@ -90,10 +90,10 @@
 
         var keys = [
             'jackett_url',
+            'parser_torrent_url',
             'lampaua_url',
             'spawnua_url',
             'jacred_url',
-            'parser_torrent_url',
             'jackett_urltwo',
             'parser_url'
         ];
@@ -184,7 +184,7 @@
     }
 
     /* ------------------------------------------------------------------ *
-     *  TORRENT PARSING & STRICT YEAR MATCHING
+     *  TORRENT PARSING & STRICT LOCAL YEAR MATCHING
      * ------------------------------------------------------------------ */
 
     function emptyMarksData() {
@@ -278,13 +278,14 @@
         results.forEach(function (item) {
             if (!isUaRelease(item, host)) return;
 
+            // Локальна перевірка року виходу торента
             if (wantYear) {
                 var tYears = extractTorrentYears(item);
                 if (tYears.length > 0) {
                     var matchesYear = tYears.some(function (y) {
                         return Math.abs(y - wantYear) <= 1;
                     });
-                    if (!matchesYear) return;
+                    if (!matchesYear) return; // Пропускаємо торент, якщо рік не збігається з карткою
                 }
             }
 
@@ -321,9 +322,11 @@
         var encodedTitle = encodeURIComponent(title);
         var list = [];
 
+        // Jackett API endpoint
         var jackettUrl = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(apiKey) + '&Query=' + encodedTitle;
         list.push(jackettUrl);
 
+        // JacRed API endpoint (резервний)
         var jacredUrl = host + '/api/v1.0/torrents?search=' + encodedTitle +
                         '&apikey=' + encodeURIComponent(apiKey) +
                         '&key=' + encodeURIComponent(apiKey) +
@@ -340,17 +343,12 @@
 
         var apiKey = getApiKey();
         var titles = [];
-        var loc = cleanTitle(movie.title || movie.name);
         var orig = cleanTitle(movie.original_title || movie.original_name);
+        var loc = cleanTitle(movie.title || movie.name);
 
-        if (loc && /[a-zа-яєіїґ0-9]/i.test(loc)) {
-            if (yearNum) titles.push(loc + ' ' + yearStr);
-            titles.push(loc);
-        }
-        if (orig && orig !== loc && /[a-zа-яєіїґ0-9]/i.test(orig)) {
-            if (yearNum) titles.push(orig + ' ' + yearStr);
-            titles.push(orig);
-        }
+        // Шукаємо за чистими назвами без додавання року в пошуковий рядок
+        if (orig && /[a-zа-яєіїґ0-9]/i.test(orig)) titles.push(orig);
+        if (loc && loc !== orig && /[a-zа-яєіїґ0-9]/i.test(loc)) titles.push(loc);
 
         if (!titles.length) return callback(emptyMarksData());
 
@@ -693,10 +691,10 @@
     }
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v9')) return;
+        if (document.getElementById('likhtar-marks-style-v10')) return;
 
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v9';
+        style.id = 'likhtar-marks-style-v10';
         style.innerHTML = '\
             .card__vote, .card__rate { display: none !important; }\
             .likhtar-marks-container {\
