@@ -248,13 +248,28 @@
         return '';
     }
 
-    function analyzeTorrents(results, movie) {
+    // Рік самої роздачі — щоб не приписати картці якість від однойменного фільму іншого року
+    function releaseYear(item) {
+        var direct = parseInt(item && (item.relased || item.released || item.year), 10);
+        if (direct >= 1900) return direct;
+        var m = String(item && item.title || '').match(/(^|[^0-9])(19|20)(\d{2})([^0-9]|$)/);
+        if (m) return parseInt(m[2] + m[3], 10);
+        return 0;
+    }
+
+    // wantYear: якщо передано — беруться лише роздачі того ж року (±1)
+    function analyzeTorrents(results, movie, wantYear) {
         var best = emptyMarksData();
         var bestRes = '';
         var found = false;
 
         results.forEach(function (item) {
             if (!isUaRelease(item)) return;
+
+            if (wantYear) {
+                var ry = releaseYear(item);
+                if (!ry || Math.abs(ry - wantYear) > 1) return;
+            }
 
             var t = String(item && item.title || '').toLowerCase();
 
@@ -290,13 +305,21 @@
      *  JACRED
      * ------------------------------------------------------------------ */
 
+    // Деякі збірки JacRed не розуміють параметр &tracker=.
+    // Дізнаємось це один раз на хост і більше його не шлемо.
+    var trackerParamBroken = {};
+
+    function buildJacredUrl(host, title, year, uid, useTracker) {
+        return host + '/api/v1.0/torrents?search=' + encodeURIComponent(title) +
+            (year ? '&year=' + year : '') +
+            '&exact=true&uid=' + encodeURIComponent(uid) +
+            (useTracker ? '&tracker=' + encodeURIComponent(UA_TRACKERS.join(',')) : '');
+    }
+
     function jacredSearch(movie, callback) {
         var dateRaw = movie.release_date || movie.first_air_date || '';
         var year = String(dateRaw).substr(0, 4);
         if (!year || isNaN(year)) return callback(emptyMarksData());
-
-        var released = new Date(dateRaw);
-        if (!isNaN(released.getTime()) && released.getTime() > Date.now()) return callback(emptyMarksData());
 
         var uid = Lampa.Storage.get('lampac_unic_id', '');
         var titles = [];
@@ -307,35 +330,55 @@
         if (!titles.length) return callback(emptyMarksData());
 
         var hosts = jacredHosts();
-        // Спершу просимо сервер віддати лише українські трекери (JacRed підтримує &tracker=).
-        // Якщо сервер старий і параметр ігнорує/не розуміє — повторюємо без нього,
-        // а зайве відсіється вже на клієнті.
-        var combos = [];
+        var tasks = [];
         for (var h = 0; h < hosts.length; h++) {
             for (var t = 0; t < titles.length; t++) {
-                combos.push({ host: hosts[h], title: titles[t], filterTrackers: true });
-                combos.push({ host: hosts[h], title: titles[t], filterTrackers: false });
+                // спершу точний пошук з роком, потім без нього
+                // (рік на трекері часто не збігається з датою TMDB)
+                tasks.push({ host: hosts[h], title: titles[t], useYear: true });
+                tasks.push({ host: hosts[h], title: titles[t], useYear: false });
             }
         }
 
-        function attempt(i) {
-            if (i >= combos.length) return callback(emptyMarksData());
-            var c = combos[i];
-            var url = c.host + '/api/v1.0/torrents?search=' + encodeURIComponent(c.title) +
-                '&year=' + year + '&exact=true&uid=' + encodeURIComponent(uid) +
-                (c.filterTrackers ? '&tracker=' + encodeURIComponent(UA_TRACKERS.join(',')) : '');
+        function runTask(task, done) {
+            var host = task.host;
+            var useTracker = !trackerParamBroken[host];
+            var url = buildJacredUrl(host, task.title, task.useYear ? year : '', uid, useTracker);
+
             log('request', movie.id, url);
+
             fetchText(url, function (err, body) {
-                if (err || !body) return attempt(i + 1);
+                if (err || !body) return done(null);
+
                 var results = parseTorrents(body);
-                if (!results.length) return attempt(i + 1);
-                var data = analyzeTorrents(results, movie);
-                if (data.empty) return attempt(i + 1);
-                callback(data);
+
+                // Порожньо при активному &tracker= — можливо, сервер його не підтримує.
+                // Пробуємо ще раз без нього; якщо цього разу щось є — більше не шлемо.
+                if (!results.length && useTracker) {
+                    var retryUrl = buildJacredUrl(host, task.title, task.useYear ? year : '', uid, false);
+                    log('retry without tracker', movie.id, retryUrl);
+                    return fetchText(retryUrl, function (e2, body2) {
+                        if (e2 || !body2) return done(null);
+                        var r2 = parseTorrents(body2);
+                        if (r2.length) trackerParamBroken[host] = true;
+                        done(r2.length ? analyzeTorrents(r2, movie, year) : null);
+                    });
+                }
+
+                if (!results.length) return done(null);
+                done(analyzeTorrents(results, movie, year));
             });
         }
 
-        attempt(0);
+        function step(i) {
+            if (i >= tasks.length) return callback(emptyMarksData());
+            runTask(tasks[i], function (data) {
+                if (data && !data.empty) return callback(data);
+                step(i + 1);
+            });
+        }
+
+        step(0);
     }
 
     /* ------------------------------------------------------------------ *
