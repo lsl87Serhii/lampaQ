@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Autoskip — v1.0
+     *  NFX Autoskip — v1.2
      *  Пропуск заставки і перехід на наступну серію в стилі Netflix.
      *
      *  Як це працює:
@@ -19,7 +19,7 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_autoskip';
-    var VERSION = '1.0';
+    var VERSION = '1.2';
     var CSS_ID = 'nfx-autoskip-css';
 
     // Межі зон навчання (частка тривалості файлу)
@@ -94,7 +94,20 @@
             s_reset: 'Скинути вивчене',
             s_reset_d: 'Забути заставки й титри всіх серіалів',
             off: 'Вимкнено',
-            done: 'Готово'
+            done: 'Готово',
+            s_debug: 'Показувати діагностику в плеєрі',
+            s_show: 'Що вивчено',
+            s_show_d: 'Показати збережені мітки',
+            nothing: 'Поки нічого не вивчено',
+            m_intro: 'заставка',
+            m_tail: 'титри',
+            s_check: 'Перевірити сумісність плеєра',
+            s_check_d: 'Запусти відео, потім натисни тут',
+            c_time: 'час',
+            c_seek: 'перемотка',
+            c_next: 'наст. серія',
+            c_ui: 'кнопка',
+            c_src: 'джерело'
         },
         ru: {
             title: 'NFX Autoskip',
@@ -112,7 +125,20 @@
             s_reset: 'Сбросить выученное',
             s_reset_d: 'Забыть заставки и титры всех сериалов',
             off: 'Выключено',
-            done: 'Готово'
+            done: 'Готово',
+            s_debug: 'Показывать диагностику в плеере',
+            s_show: 'Что выучено',
+            s_show_d: 'Показать сохранённые метки',
+            nothing: 'Пока ничего не выучено',
+            m_intro: 'заставка',
+            m_tail: 'титры',
+            s_check: 'Проверить совместимость плеера',
+            s_check_d: 'Запусти видео, затем нажми здесь',
+            c_time: 'время',
+            c_seek: 'перемотка',
+            c_next: 'след. серия',
+            c_ui: 'кнопка',
+            c_src: 'источник'
         },
         en: {
             title: 'NFX Autoskip',
@@ -130,7 +156,20 @@
             s_reset: 'Reset learned data',
             s_reset_d: 'Forget intros and credits for all series',
             off: 'Off',
-            done: 'Done'
+            done: 'Done',
+            s_debug: 'Show diagnostics in player',
+            s_show: 'What is learned',
+            s_show_d: 'Show stored marks',
+            nothing: 'Nothing learned yet',
+            m_intro: 'intro',
+            m_tail: 'credits',
+            s_check: 'Check player compatibility',
+            s_check_d: 'Start a video, then press here',
+            c_time: 'time',
+            c_seek: 'seek',
+            c_next: 'next ep',
+            c_ui: 'button',
+            c_src: 'source'
         }
     };
 
@@ -341,6 +380,86 @@
         }
     };
 
+
+    // =================================================================
+    //  Джерело часу
+    //  Внутрішній HTML5-плеєр Lampa і нативні плеєри обгорток (tvOS Pro,
+    //  Universal, Online) звітують по-різному. Пробуємо все, що є, і
+    //  беремо перше робоче.
+    // =================================================================
+
+    var Clock = {
+        source: '—',
+        poller: null,
+        videoAt: 0,     // коли востаннє приходила подія від HTML5-плеєра
+
+        can: function () {
+            return {
+                video_events: !!(window.Lampa && Lampa.PlayerVideo && Lampa.PlayerVideo.listener),
+                video_elem: !!(window.Lampa && Lampa.PlayerVideo && typeof Lampa.PlayerVideo.video === 'function'),
+                seek: !!(window.Lampa && Lampa.PlayerVideo && typeof Lampa.PlayerVideo.to === 'function'),
+                timeline: !!(window.Lampa && Lampa.Timeline && Lampa.Timeline.listener),
+                next: !!(window.Lampa && Lampa.PlayerPlaylist && typeof Lampa.PlayerPlaylist.next === 'function'),
+                render: !!toNode(window.Lampa && Lampa.Player && Lampa.Player.render && Lampa.Player.render())
+            };
+        },
+
+        feed: function (source, current, duration) {
+            if (source === 'video') this.videoAt = Date.now();
+            // події HTML5-плеєра мають пріоритет, але тільки поки вони живі:
+            // з нативним плеєром вони можуть замовкнути назавжди
+            else if (this.videoAt && Date.now() - this.videoAt < 3000) return;
+
+            this.source = source;
+            Engine.tick(current || 0, duration || 0);
+        },
+
+        startPolling: function () {
+            var self = this;
+            clearInterval(this.poller);
+            this.videoAt = 0;
+
+            this.poller = setInterval(function () {
+                if (self.source === 'video') return;
+
+                var v = null;
+                try { v = Lampa.PlayerVideo.video(); } catch (e) { /* ignore */ }
+                if (!v || !v.duration || isNaN(v.duration)) return;
+
+                self.feed('poll', v.currentTime || 0, v.duration);
+            }, 700);
+        },
+
+        stopPolling: function () {
+            clearInterval(this.poller);
+            this.poller = null;
+        },
+
+        bind: function () {
+            var self = this;
+
+            if (window.Lampa && Lampa.PlayerVideo && Lampa.PlayerVideo.listener) {
+                Lampa.PlayerVideo.listener.follow('timeupdate', function (e) {
+                    try { self.feed('video', e.current, e.duration); } catch (err) { /* ignore */ }
+                });
+
+                Lampa.PlayerVideo.listener.follow('rewind', function () {
+                    try { Engine.onRewind(); } catch (err) { /* ignore */ }
+                });
+            }
+
+            if (window.Lampa && Lampa.Timeline && Lampa.Timeline.listener) {
+                Lampa.Timeline.listener.follow('update', function (e) {
+                    try {
+                        var road = e && e.data && e.data.road;
+                        if (!road || !road.duration) return;
+                        self.feed('timeline', road.time, road.duration);
+                    } catch (err) { /* ignore */ }
+                });
+            }
+        }
+    };
+
     // =================================================================
     //  Ядро
     // =================================================================
@@ -354,11 +473,24 @@
         tailDone: false,
         acted: false,
 
+        prev: 0,            // значення до останнього тіку
+        prevAt: 0,          // коли прийшов попередній тік (Date.now)
+        rewinding: false,   // триває покрокова перемотка
+        rewindFrom: 0,
+        rewindTo: 0,
+        rewindTimer: null,
+        selfSeek: 0,        // час нашої власної перемотки — її не вчимо
+
         reset: function () {
             this.id = null;
             this.marks = null;
             this.duration = 0;
             this.last = 0;
+            this.prev = 0;
+            this.prevAt = 0;
+            this.rewinding = false;
+            this.selfSeek = 0;
+            clearTimeout(this.rewindTimer);
             this.introDone = false;
             this.tailDone = false;
             this.acted = false;
@@ -433,25 +565,104 @@
             if (!this.duration) return;
 
             var prev = this.last;
+            var now = Date.now();
+            var elapsed = this.prevAt ? (now - this.prevAt) / 1000 : 0;
+
+            this.prev = prev;
             this.last = current;
+            this.prevAt = now;
 
-            // стрибок уперед більший за крок таймапдейту — це перемотка
-            if (prev && current - prev > 5) {
-                this.learn(prev, current);
-                Button.hide();
-                return;
-            }
+            this.debug(current);
 
-            // назад — теж перемотка, скидаємо стан дій
-            if (prev && current < prev - 2) {
-                this.acted = false;
-                this.tailDone = false;
+            // під час покрокової перемотки нічого не робимо —
+            // підсумок підіб'ємо, коли вона завершиться
+            if (this.rewinding) return;
+
+            // Стрибок = позиція зросла більше, ніж минуло реального часу.
+            // Так детекція не залежить від того, як часто джерело шле час
+            // (HTML5 шле щосекунди, таймлайн — раз на кілька десятків секунд).
+            var jumped = prev && (Math.abs(current - prev) - elapsed > 5);
+
+            if (jumped) {
+                var mine = this.selfSeek && Math.abs(current - this.selfSeek) < 5;
+                this.selfSeek = 0;
+
+                if (!mine && current > prev) this.learn(prev, current);
+
+                if (current < prev) {
+                    this.acted = false;
+                    this.tailDone = false;
+                }
+
                 Button.hide();
                 return;
             }
 
             this.checkIntro(current);
             this.checkTail(current);
+        },
+
+        /**
+         * Покрокова перемотка Lampa: кожне натискання шле свій timeupdate,
+         * а currentTime міняється лише через секунду після останнього.
+         * Тому вчимося на підсумку всієї сесії, а не на окремому кроці.
+         */
+        onRewind: function () {
+            var self = this;
+
+            if (!this.rewinding) {
+                this.rewinding = true;
+                this.rewindFrom = this.prev || this.last;
+            }
+
+            this.rewindTo = this.last;
+
+            Button.hide();
+
+            clearTimeout(this.rewindTimer);
+            this.rewindTimer = setTimeout(function () {
+                self.rewinding = false;
+
+                var from = self.rewindFrom;
+                var to = self.rewindTo;
+
+                if (to > from) self.learn(from, to);
+                else {
+                    self.acted = false;
+                    self.tailDone = false;
+                }
+
+                self.last = to;
+            }, 1500);
+        },
+
+        /** Діагностичний рядок поверх відео */
+        debug: function (current) {
+            if (!isOn('nfx_sk_debug', false)) {
+                remove(document.getElementById('nfx-sk-debug'));
+                return;
+            }
+
+            var root = toNode(Lampa.Player.render());
+            if (!root) return;
+
+            var box = document.getElementById('nfx-sk-debug');
+            if (!box) {
+                box = el('div', 'nfx-sk-debug');
+                box.id = 'nfx-sk-debug';
+                root.appendChild(box);
+            }
+
+            var m = this.marks || {};
+            var tail = this.tailStart();
+
+            box.textContent =
+                'id: ' + (this.id || '—') +
+                '   час: ' + Math.round(current) + '/' + Math.round(this.duration) +
+                '   заставка: ' + (m.intro || '—') +
+                '   титри з: ' + (tail ? Math.round(tail) : '—') +
+                '   джерело: ' + Clock.source +
+                (this.rewinding ? '   [перемотка]' : '');
         },
 
         checkIntro: function (current) {
@@ -466,6 +677,7 @@
             var self = this;
             Button.show(t('skip_intro'), function () {
                 self.introDone = true;
+                self.selfSeek = intro;
                 try { Lampa.PlayerVideo.to(intro); } catch (e) { /* ignore */ }
             });
         },
@@ -496,16 +708,20 @@
         init: function () {
             var self = this;
 
-            Lampa.Player.listener.follow('start', function () { self.start(); });
+            Lampa.Player.listener.follow('start', function () {
+                self.start();
+                Clock.startPolling();
+            });
+
             Lampa.Player.listener.follow('destroy', function () {
+                Clock.stopPolling();
+                Clock.source = '—';
+                Clock.videoAt = 0;
                 self.reset();
                 Button.destroy();
             });
 
-            Lampa.PlayerVideo.listener.follow('timeupdate', function (e) {
-                try { self.tick(e.current || 0, e.duration || 0); } catch (err) { /* ignore */ }
-            });
-
+            Clock.bind();
             Button.controller();
         }
     };
@@ -529,7 +745,11 @@
             ' background: rgba(255,255,255,0.35); pointer-events: none; }',
             '.nfx-skip .player-skip__progress-line { height: 100%; background: #fff;' +
             ' transform-origin: left center; transform: scaleX(1); }',
-            '.player--panel-visible .nfx-skip { bottom: 9em; }'
+            '.player--panel-visible .nfx-skip { bottom: 9em; }',
+            '.nfx-sk-debug { position: absolute; left: 1.5em; top: 1.2em; z-index: 60;' +
+            ' padding: 0.4em 0.8em; border-radius: 0.4em; font-size: 0.9em;' +
+            ' background: rgba(0,0,0,0.65); color: #6f6; pointer-events: none;' +
+            ' font-family: monospace; }'
         ].join('\n');
 
         var style = document.createElement('style');
@@ -559,7 +779,8 @@
               values: { '0': '0 c', '2': '2 c', '4': '4 c', '6': '6 c', '8': '8 c' } },
             { name: 'nfx_sk_tail', type: 'select', def: '0', title: t('s_tail'),
               values: { '0': t('off'), '30': '30 c', '45': '45 c', '60': '60 c', '90': '90 c' } },
-            { name: 'nfx_sk_movie', type: 'trigger', def: false, title: t('s_movie') }
+            { name: 'nfx_sk_movie', type: 'trigger', def: false, title: t('s_movie') },
+            { name: 'nfx_sk_debug', type: 'trigger', def: false, title: t('s_debug') }
         ];
 
         params.forEach(function (p) {
@@ -571,6 +792,43 @@
                 param: conf,
                 field: { name: p.title }
             });
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: { name: 'nfx_sk_check', type: 'button' },
+            field: { name: t('s_check'), description: t('s_check_d') },
+            onChange: function () {
+                var c = Clock.can();
+                var ok = function (v) { return v ? '+' : '−'; };
+
+                Lampa.Noty.show(
+                    t('c_time') + ': ' + ok(c.video_events || c.timeline) +
+                    '  ' + t('c_seek') + ': ' + ok(c.seek) +
+                    '  ' + t('c_next') + ': ' + ok(c.next) +
+                    '  ' + t('c_ui') + ': ' + ok(c.render) +
+                    '  ' + t('c_src') + ': ' + Clock.source
+                );
+            }
+        });
+
+        Lampa.SettingsApi.addParam({
+            component: PLUGIN_ID,
+            param: { name: 'nfx_sk_show', type: 'button' },
+            field: { name: t('s_show'), description: t('s_show_d') },
+            onChange: function () {
+                var all = Memory.all();
+                var keys = Object.keys(all);
+
+                if (!keys.length) return Lampa.Noty.show(t('nothing'));
+
+                var lines = keys.slice(0, 8).map(function (k) {
+                    var r = all[k];
+                    return k + ': ' + t('m_intro') + ' ' + (r.intro || '—') + ', ' + t('m_tail') + ' ' + (r.tail || '—');
+                });
+
+                Lampa.Noty.show(keys.length + ' — ' + lines.join(' | '));
+            }
         });
 
         Lampa.SettingsApi.addParam({
@@ -591,11 +849,6 @@
     function bootstrap() {
         if (window.__nfx_autoskip) return;
         window.__nfx_autoskip = true;
-
-        if (!Lampa.PlayerVideo || !Lampa.PlayerVideo.listener) {
-            console.log('[NFX Autoskip] внутрішній плеєр недоступний — плагін не запущено');
-            return;
-        }
 
         initSettings();
         injectCSS();
