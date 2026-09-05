@@ -1,96 +1,23 @@
 (function () {
     'use strict';
 
-    var PLUGIN_KEY = 'nfx_tv_v9';
-    var isExoticOS = /Vidaa|Web0S|Tizen|SmartTV|Metrological|NetCast/i.test(navigator.userAgent);
+    function initLampaNetflixEngine() {
+        // 1. Повна очистка від стандартних елементів Lampa та впровадження стилів
+        var styleId = 'lampa-netflix-real-tv-style';
+        var oldStyle = document.getElementById(styleId);
+        if (oldStyle) oldStyle.remove();
 
-    // ─────────────────────────────────────────────────────────────────
-    // 1. НАЛАШТУВАННЯ ТА МОВНИЙ СЛОВНИК (i18n)
-    // ─────────────────────────────────────────────────────────────────
-
-    function initSettings() {
-        if (!window.Lampa || !Lampa.SettingsApi) return;
-
-        var lang = Lampa.Storage.get('language', 'uk');
-        if (lang === 'ua') lang = 'uk';
-
-        var i18n = {
-            'uk': {
-                'title': 'Netflix TV Layout',
-                'enable': 'Увімкнути інтерфейс Netflix TV',
-                'card_width': 'Ширина активної картки (16:9)',
-                'desc_lines': 'Кількість рядків опису',
-                'on': 'Увімкнено',
-                'off': 'Вимкнено'
-            },
-            'en': {
-                'title': 'Netflix TV Layout',
-                'enable': 'Enable Netflix TV UI',
-                'card_width': 'Active Card Width (16:9)',
-                'desc_lines': 'Description Lines',
-                'on': 'Enabled',
-                'off': 'Disabled'
-            }
-        };
-
-        function t(key) {
-            var dict = i18n[lang] || i18n['uk'];
-            return dict[key] || key;
-        }
-
-        // Реєстрація власної секції в налаштуваннях Lampa
-        Lampa.SettingsApi.addComponent({
-            component: 'nfx_tv_settings',
-            name: t('title'),
-            icon: '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>'
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'nfx_tv_settings',
-            param: {
-                name: 'nfx_tv_enabled',
-                type: 'select',
-                values: { 'true': t('on'), 'false': t('off') },
-                default: 'true'
-            },
-            field: { name: t('enable') },
-            onChange: function () { injectCSS(); }
-        });
-
-        Lampa.SettingsApi.addParam({
-            component: 'nfx_tv_settings',
-            param: {
-                name: 'nfx_tv_card_width',
-                type: 'select',
-                values: { '380px': '380px', '420px': '420px (Стандарт)', '460px': '460px' },
-                default: '420px'
-            },
-            field: { name: t('card_width') },
-            onChange: function () { injectCSS(); }
-        });
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    // 2. ДИНАМІЧНІ СТИЛІ (CSS)
-    // ─────────────────────────────────────────────────────────────────
-
-    function injectCSS() {
-        var old = document.getElementById('nfx-tv-layout-style');
-        if (old) old.remove();
-
-        var enabled = Lampa.Storage.get('nfx_tv_enabled', 'true');
-        if (enabled === 'false' || enabled === false) return;
-
-        var activeWidth = Lampa.Storage.get('nfx_tv_card_width', '420px');
-
-        var css = `
-            /* --- ПРИХОВУЄМО ВСІ ЛОГОТИПИ ТА СТАНДАРТНІ ТИТРИ --- */
+        var style = document.createElement('style');
+        style.id = styleId;
+        style.innerHTML = `
+            /* Повністю приховуємо стандартну шапку Lampa (іконки, годинник, профіль) */
             .head__logo, .head__title, .head__time, .head__profile, 
-            .head__settings, .head__notice, .head__logo-n, .head__logo-netflix {
+            .head__settings, .head__notice, .head__action, .head__actions,
+            .head__menu, .head__icons {
                 display: none !important;
             }
 
-            /* --- ЦЕНТРОВАНА ШАПКА БЕЗ ЛОГОТИПІВ --- */
+            /* Фіксована центрована шапка Netflix (єдина активна на екрані) */
             .head {
                 background: linear-gradient(180deg, rgba(15,15,15,0.98) 0%, rgba(15,15,15,0) 100%) !important;
                 display: flex !important;
@@ -99,22 +26,23 @@
                 position: fixed !important;
                 top: 0; left: 0; right: 0;
                 z-index: 2000 !important;
-                height: 70px !important;
-                padding: 0 50px !important;
+                height: 65px !important;
+                padding: 0 40px !important;
             }
 
-            .nfx-tv-nav {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 16px;
+            .nfx-head-bar {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                gap: 12px !important;
+                width: 100% !important;
             }
 
-            .nfx-nav-item {
+            .nfx-head-item {
                 color: #a3a3a3;
-                font-size: 16px;
-                padding: 8px 20px;
-                border-radius: 24px;
+                font-size: 15px;
+                padding: 6px 18px;
+                border-radius: 20px;
                 font-weight: 500;
                 cursor: pointer;
                 transition: all 0.2s ease;
@@ -123,46 +51,48 @@
                 gap: 8px;
             }
 
-            .nfx-nav-item.focus, .nfx-nav-item:focus {
+            /* Підсвічування кнопки пульта ТВ при переході вгору */
+            .nfx-head-item.focus, .nfx-head-item:focus {
                 background-color: #ffffff !important;
                 color: #000000 !important;
                 font-weight: bold !important;
-                transform: scale(1.05);
+                transform: scale(1.05) !important;
             }
 
-            .nfx-nav-item.active {
+            .nfx-head-item.active {
                 color: #ffffff;
             }
 
-            /* --- КАРУСЕЛЬ ТА СЛОТ 16:9 ЗЛІВА --- */
-            .scroll__content, .items__layer {
+            /* Контейнери каруселі */
+            .scroll__content, .items__layer, .scroll__body {
                 overflow: hidden !important;
-                padding-left: 50px !important;
             }
 
-            .items__body {
+            .items-line__body, .items__body {
                 display: flex !important;
                 align-items: flex-start !important;
-                gap: 18px !important;
-                transition: transform 0.35s cubic-bezier(0.25, 1, 0.5, 1) !important;
-                will-change: transform;
+                gap: 16px !important;
+                padding-left: 50px !important;
+                transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1) !important;
+                will-change: transform !important;
             }
 
-            /* Неактивні вертикальні картки */
+            /* Звичайні вертикальні картки (рівно 3 праворуч від активної) */
             .card {
-                width: 155px !important;
-                height: 232px !important;
+                width: 145px !important;
+                height: 218px !important;
                 flex-shrink: 0 !important;
-                border-radius: 8px !important;
-                transition: width 0.35s ease, height 0.35s ease, opacity 0.25s ease !important;
+                border-radius: 6px !important;
+                transition: width 0.3s ease, height 0.3s ease, opacity 0.2s ease !important;
                 overflow: hidden !important;
                 border: none !important;
+                margin: 0 !important;
             }
 
             .card .card__view {
                 width: 100% !important;
                 height: 100% !important;
-                border-radius: 8px !important;
+                border-radius: 6px !important;
             }
 
             .card .card__img {
@@ -171,197 +101,179 @@
                 object-fit: cover !important;
             }
 
-            /* ФІКСОВАНА АКТИВНА КАРТКА 16:9 У ЛІВОМУ СЛОТІ */
+            /* ФІКСОВАНА АКТИВНА КАРТКА 16:9 ЗЛІВА (Завжди в першому слоті) */
             .card.focus {
-                width: ${activeWidth} !important;
-                height: 232px !important;
-                box-shadow: 0 14px 35px rgba(0,0,0,0.95), 0 0 0 3px #FFFFFF !important;
+                width: 388px !important; /* Пропорція 16:9 при висоті 218px */
+                height: 218px !important;
+                box-shadow: 0 12px 30px rgba(0,0,0,0.95), 0 0 0 3px #FFFFFF !important;
                 z-index: 100 !important;
             }
 
-            /* Приховуємо картки за межами 3 вертикальних праворуч */
-            .card.nfx-out-of-bounds {
-                opacity: 0 !important;
-                pointer-events: none !important;
+            /* ПРИХОВУЄМО ВСІ КАРТКИ, КРІМ 1 ВЕЛИКОЇ ТА 3 ВЕРТИКАЛЬНИХ */
+            .card.nfx-hide-card {
+                display: none !important;
             }
 
             .card:not(.focus) .card__title, 
             .card:not(.focus) .card__age,
-            .card:not(.focus) .card__quality {
+            .card:not(.focus) .card__quality,
+            .card:not(.focus) .card__vote {
                 display: none !important;
             }
 
-            /* --- ДЕТАЛІ ПІД КАРОУСЕЛЛЮ --- */
-            .nfx-details-container {
-                padding: 18px 50px 25px 50px;
+            /* Панель метаданих під каруселлю */
+            .nfx-info-block {
+                padding: 15px 50px 20px 50px;
                 color: #ffffff;
-                max-width: 900px;
-                animation: nfxSlideUp 0.2s ease-out;
+                max-width: 850px;
             }
 
-            .nfx-details-container .nfx-title {
-                font-size: 26px;
+            .nfx-info-block .nfx-title {
+                font-size: 24px;
                 font-weight: 800;
                 margin-bottom: 6px;
             }
 
-            .nfx-details-container .nfx-meta {
+            .nfx-info-block .nfx-meta {
                 display: flex;
                 align-items: center;
-                gap: 12px;
-                font-size: 15px;
+                gap: 10px;
+                font-size: 14px;
                 color: #a3a3a3;
                 margin-bottom: 8px;
             }
 
-            .nfx-details-container .nfx-match {
+            .nfx-info-block .nfx-match {
                 color: #46d369;
                 font-weight: bold;
             }
 
-            .nfx-details-container .nfx-overview {
+            .nfx-info-block .nfx-desc {
                 font-size: 14px;
-                line-height: 1.45;
+                line-height: 1.4;
                 color: #cccccc;
                 display: -webkit-box;
                 -webkit-line-clamp: 3;
                 -webkit-box-orient: vertical;
                 overflow: hidden;
-                margin-bottom: 10px;
+                margin-bottom: 8px;
             }
 
-            .nfx-details-container .nfx-badge {
-                display: inline-flex;
-                align-items: center;
-                background: rgba(255, 255, 255, 0.15);
-                padding: 5px 12px;
+            .nfx-info-block .nfx-badge {
+                display: inline-block;
+                background: rgba(255,255,255,0.15);
+                padding: 4px 10px;
                 border-radius: 4px;
-                font-size: 13px;
-                color: #ffffff;
-            }
-
-            @keyframes nfxSlideUp {
-                from { opacity: 0; transform: translateY(4px); }
-                to { opacity: 1; transform: translateY(0); }
+                font-size: 12px;
+                color: #fff;
             }
         `;
-
-        var style = document.createElement('style');
-        style.id = 'nfx-tv-layout-style';
-        style.textContent = css;
         document.head.appendChild(style);
-    }
 
-    // ─────────────────────────────────────────────────────────────────
-    // 3. АКТИВНА ШАПКА ДЛЯ ПУЛЬТА SMART TV
-    // ─────────────────────────────────────────────────────────────────
+        // 2. Встановлення інтерактивної шапки
+        setupHeader();
 
-    function setupHeaderNav() {
-        var head = document.querySelector('.head');
-        if (!head || head.querySelector('.nfx-tv-nav')) return;
-
-        var nav = document.createElement('div');
-        nav.className = 'nfx-tv-nav';
-        nav.innerHTML = `
-            <div class="nfx-nav-item focusable" data-action="search">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-                Пошук
-            </div>
-            <div class="nfx-nav-item focusable active" data-action="home">Головна</div>
-            <div class="nfx-nav-item focusable" data-action="tv">Серіали</div>
-            <div class="nfx-nav-item focusable" data-action="movie">Фільми</div>
-            <div class="nfx-nav-item focusable" data-action="settings">Налаштування</div>
-        `;
-
-        head.appendChild(nav);
-
-        nav.addEventListener('click', function (e) {
-            var item = e.target.closest('.nfx-nav-item');
-            if (!item) return;
-
-            var action = item.getAttribute('data-action');
-            if (action === 'search') Lampa.Search.open();
-            if (action === 'home') Lampa.Activity.push({ title: 'Головна', component: 'main' });
-            if (action === 'tv') Lampa.Activity.push({ title: 'Серіали', component: 'tv' });
-            if (action === 'movie') Lampa.Activity.push({ title: 'Фільми', component: 'movie' });
-            if (action === 'settings') Lampa.Activity.push({ title: 'Налаштування', component: 'settings' });
-        });
-    }
-
-    // ─────────────────────────────────────────────────────────────────
-    // 4. МЕХАНІКА ФІКСОВАНОГО СЛОТА ЗЛІВА ТА КАРУСЕЛІ
-    // ─────────────────────────────────────────────────────────────────
-
-    function initTVEngine() {
+        // 3. Відстеження фокусу та підтягування каруселі
         Lampa.Listener.follow('card', function (e) {
-            var enabled = Lampa.Storage.get('nfx_tv_enabled', 'true');
-            if (enabled === 'false' || enabled === false) return;
-
             if (e.type === 'focus') {
                 var card = e.target;
                 var data = e.data || {};
 
-                // 1. Фіксуємо активну рамку зліва, підсуваючи карусель
-                shiftRowKeepLeft(card);
+                // Примусовий зсув стрічки ліворуч, щоб активний елемент зафіксувався зліва
+                positionCarouselFixedLeft(card);
 
-                // 2. Підставляємо горизонтальний Backdrop (16:9)
+                // Заміна постера на 16:9 кадр
                 if (data.backdrop_path || data.background) {
                     var img = card.querySelector('.card__img');
                     if (img) {
-                        if (!card.dataset.posterSrc) card.dataset.posterSrc = img.src;
+                        if (!card.dataset.verticalPoster) card.dataset.verticalPoster = img.src;
                         var backdropUrl = Lampa.TMDB ? Lampa.TMDB.image('backdrop', data.backdrop_path, 'w780') : (data.background || img.src);
                         img.src = backdropUrl;
                     }
                 }
 
-                // 3. Відображаємо опис
-                renderDetailsPanel(card, data);
+                renderInfo(card, data);
             }
 
             if (e.type === 'blur') {
                 var card = e.target;
-                if (card && card.dataset.posterSrc) {
+                if (card && card.dataset.verticalPoster) {
                     var img = card.querySelector('.card__img');
-                    if (img) img.src = card.dataset.posterSrc;
-                    delete card.dataset.posterSrc;
+                    if (img) img.src = card.dataset.verticalPoster;
+                    delete card.dataset.verticalPoster;
                 }
             }
         });
     }
 
-    function shiftRowKeepLeft(activeCard) {
-        var row = activeCard.closest('.items__body') || activeCard.closest('.category-full__body');
+    // Впровадження активної шапки для ТВ-пульта
+    function setupHeader() {
+        var head = document.querySelector('.head');
+        if (!head) return;
+
+        head.innerHTML = '';
+
+        var bar = document.createElement('div');
+        bar.className = 'nfx-head-bar';
+        bar.innerHTML = `
+            <div class="nfx-head-item focusable" data-action="search">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                Пошук
+            </div>
+            <div class="nfx-head-item focusable active" data-action="home">Головна</div>
+            <div class="nfx-head-item focusable" data-action="tv">Серіали</div>
+            <div class="nfx-head-item focusable" data-action="movie">Фільми</div>
+            <div class="nfx-head-item focusable" data-action="settings">Налаштування</div>
+        `;
+        head.appendChild(bar);
+
+        var items = bar.querySelectorAll('.nfx-head-item');
+        items.forEach(function(item) {
+            item.addEventListener('click', function() {
+                var act = item.getAttribute('data-action');
+                if (act === 'search') Lampa.Search.open();
+                else if (act === 'home') Lampa.Activity.push({ title: 'Головна', component: 'main' });
+                else if (act === 'tv') Lampa.Activity.push({ title: 'Серіали', component: 'tv' });
+                else if (act === 'movie') Lampa.Activity.push({ title: 'Фільми', component: 'movie' });
+                else if (act === 'settings') Lampa.Activity.push({ title: 'Налаштування', component: 'settings' });
+            });
+        });
+    }
+
+    // Жорстка фіксація 16:9 слота зліва + залишаємо тільки 3 картки праворуч
+    function positionCarouselFixedLeft(activeCard) {
+        var row = activeCard.closest('.items__body') || activeCard.closest('.items-line__body') || activeCard.closest('.category-full__body');
         if (!row) return;
 
         var cards = Array.from(row.children);
-        var activeIndex = cards.indexOf(activeCard);
+        var activeIdx = cards.indexOf(activeCard);
 
-        if (activeIndex !== -1) {
-            // Крок зсуву: 155px (ширина малого постеру) + 18px gap = 173px
-            var shiftX = activeIndex * 173;
-            row.style.transform = 'translateX(-' + shiftX + 'px)';
+        if (activeIdx !== -1) {
+            // Крок зсуву стрічки: 145px (ширина малого постеру) + 16px gap = 161px
+            var shiftPixels = activeIdx * 161;
+            row.style.transform = 'translate3d(-' + shiftPixels + 'px, 0, 0)';
 
-            // Залишаємо видимою тільки 1 активну картку 16:9 + 3 вертикальні праворуч
-            cards.forEach(function (c, idx) {
-                if (idx < activeIndex || idx > activeIndex + 3) {
-                    c.classList.add('nfx-out-of-bounds');
+            // Відображаємо рівно 1 активну 16:9 + 3 вертикальні праворуч (разом 4 елементи)
+            cards.forEach(function(c, i) {
+                if (i >= activeIdx && i <= activeIdx + 3) {
+                    c.classList.remove('nfx-hide-card');
                 } else {
-                    c.classList.remove('nfx-out-of-bounds');
+                    c.classList.add('nfx-hide-card');
                 }
             });
         }
     }
 
-    function renderDetailsPanel(card, data) {
-        var row = card.closest('.items__body') || card.closest('.category-full__body');
+    function renderInfo(card, data) {
+        var row = card.closest('.items__body') || card.closest('.items-line__body') || card.closest('.category-full__body');
         if (!row) return;
 
         var parent = row.parentNode;
-        var panel = parent.querySelector('.nfx-details-container');
-        if (!panel) {
-            panel = document.createElement('div');
-            panel.className = 'nfx-details-container';
-            parent.insertBefore(panel, row.nextSibling);
+        var info = parent.querySelector('.nfx-info-block');
+        if (!info) {
+            info = document.createElement('div');
+            info.className = 'nfx-info-block';
+            parent.insertBefore(info, row.nextSibling);
         }
 
         var title = data.title || data.name || '';
@@ -370,7 +282,7 @@
         var rating = data.vote_average ? Math.round(data.vote_average * 10) + '% збіг' : '98% збіг';
         var overview = data.overview || 'Опис доступний при перегляді деталей.';
 
-        panel.innerHTML = `
+        info.innerHTML = `
             <div class="nfx-title">${title}</div>
             <div class="nfx-meta">
                 <span class="nfx-match">${rating}</span>
@@ -378,50 +290,44 @@
                 <span>${type}</span>
                 <span>16+</span>
             </div>
-            <div class="nfx-overview">${overview}</div>
+            <div class="nfx-desc">${overview}</div>
             <div class="nfx-badge">👍 Гадаємо, вам це дуже сподобається</div>
         `;
     }
 
-    // ─────────────────────────────────────────────────────────────────
-    // 5. БУТСТРАП ТА СТЕЖЕННЯ ЗА ЗМІНАМИ STORAGE
-    // ─────────────────────────────────────────────────────────────────
+    function registerInSettings() {
+        if (window.Lampa && Lampa.SettingsApi) {
+            Lampa.SettingsApi.addComponent({
+                component: 'nfx_fixed_tv',
+                name: 'Netflix TV Layout (Fixed)',
+                icon: '<svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="15" rx="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>'
+            });
 
-    function bootstrap() {
-        if (window.__nfx_tv_layout_injected) return;
-        window.__nfx_tv_layout_injected = true;
-
-        initSettings();
-        injectCSS();
-        setupHeaderNav();
-        initTVEngine();
-
-        // Автоматичне перемальовування CSS при зміні налаштувань у Storage
-        if (window.Lampa && Lampa.Storage && Lampa.Storage.listener) {
-            Lampa.Storage.listener.follow('change', function (e) {
-                if (e.name && e.name.indexOf('nfx_tv_') === 0) {
-                    injectCSS();
-                }
+            Lampa.SettingsApi.addParam({
+                component: 'nfx_fixed_tv',
+                param: {
+                    name: 'nfx_fixed_enabled',
+                    type: 'select',
+                    values: { 'true': 'Увімкнено', 'false': 'Вимкнено' },
+                    default: 'true'
+                },
+                field: { name: 'Статус плагіна' },
+                onChange: function() { initLampaNetflixEngine(); }
             });
         }
-
-        console.log('[NFX TV Engine] Ready & Running');
     }
 
-    if (window.Lampa && Lampa.Listener) {
+    function start() {
+        registerInSettings();
+        initLampaNetflixEngine();
+    }
+
+    if (window.appready) {
+        start();
+    } else if (window.Lampa && Lampa.Listener) {
         Lampa.Listener.follow('app', function (e) {
-            if (e.type === 'ready') bootstrap();
+            if (e.type === 'ready') start();
         });
-        setTimeout(bootstrap, 500);
-    } else {
-        var poll = setInterval(function () {
-            if (typeof Lampa !== 'undefined' && Lampa.Listener) {
-                clearInterval(poll);
-                Lampa.Listener.follow('app', function (e) {
-                    if (e.type === 'ready') bootstrap();
-                });
-                setTimeout(bootstrap, 500);
-            }
-        }, 200);
+        setTimeout(start, 600);
     }
 })();
