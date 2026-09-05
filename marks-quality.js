@@ -4,7 +4,7 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v18';
+    var CACHE_KEY = 'marks_quality_cache_v19';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
@@ -228,7 +228,6 @@
         var targetClean = String(targetTitle || '').toLowerCase().trim();
         var torrentClean = String(torrentTitle || '').toLowerCase().trim();
 
-        // Якщо картка НЕ містить цифру 2/3/4 в назві, а торент містить " 2 ", " 3 ", " 2 /" - це сиквел
         var targetHasNum = /\b(2|3|4|5|ii|iii|iv)\b/.test(targetClean);
         var torrentHasNum = /\b(2|3|4|5|ii|iii|iv)\b/.test(torrentClean);
 
@@ -249,20 +248,16 @@
             var title = String(item.Title || item.title || item.name || '');
             if (!title) return;
 
-            // Блокування екранок (Telesync/Cam)
             if (isCamRelease(title)) return;
-
-            // Блокування плутанини з сиквелами ("Ваяна" vs "Ваяна 2")
             if (isSequelMismatch(targetTitle, title)) return;
 
-            // Жорстока перевірка року виходу
             var tYears = extractTorrentYears(title);
             if (wantYear > 0) {
                 if (tYears.length > 0) {
                     var match = tYears.some(function (y) { return Math.abs(y - wantYear) <= 1; });
-                    if (!match) return; // Рік торента не збігається з карткою Lampa
+                    if (!match) return;
                 } else {
-                    return; // Якщо рік картки відомий, а в торенті рік відсутній — відсікаємо
+                    return;
                 }
             }
 
@@ -398,6 +393,13 @@
 
         if (!isSettingEnabled('marks_enabled', true) || data.empty) return;
 
+        var theme = Lampa.Storage.get('marks_theme', 'mono');
+        if (theme !== 'color') {
+            container.addClass('likhtar-marks-mono');
+        } else {
+            container.removeClass('likhtar-marks-mono');
+        }
+
         if (data.ukr && isSettingEnabled('marks_ua', true)) container.append(createBadge('ua', 'UA'));
         if (data.eng && isSettingEnabled('marks_en', true)) container.append(createBadge('en', 'EN'));
 
@@ -470,9 +472,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v18')) return;
+        if (document.getElementById('likhtar-marks-style-v19')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v18';
+        style.id = 'likhtar-marks-style-v19';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -518,6 +520,14 @@
             .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; }\
             .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); }\
             .likhtar-marks-star { margin-right: 0.15em; }\
+            .likhtar-marks-container.likhtar-marks-mono .likhtar-marks-badge {\
+                background: linear-gradient(135deg, #1a1a2e, #16213e) !important;\
+                color: #ffffff !important;\
+                border: 1px solid rgba(255,255,255,0.25) !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-mono .likhtar-marks-star {\
+                color: #ffffff !important;\
+            }\
         ';
         (document.head || document.documentElement).appendChild(style);
     }
@@ -529,11 +539,28 @@
 
         var component = 'interface';
         Lampa.SettingsApi.addParam({ component: component, param: { type: 'title' }, field: { name: 'Мітки якості (Marks)' } });
-        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_enabled', type: 'trigger', default: true }, field: { name: 'Увімкнути модуль міток' }, onChange: function () { setTimeout(processCards, 50); } });
-        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_ua', type: 'trigger', default: true }, field: { name: 'Показувати мітку UA' }, onChange: function () { setTimeout(processCards, 50); } });
-        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_4k', type: 'trigger', default: true }, field: { name: 'Показувати мітку 4K' }, onChange: function () { setTimeout(processCards, 50); } });
-        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_fhd', type: 'trigger', default: true }, field: { name: 'Показувати мітки 1080p / 720p' }, onChange: function () { setTimeout(processCards, 50); } });
-        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_rating', type: 'trigger', default: true }, field: { name: 'Показувати мітку рейтингу' }, onChange: function () { setTimeout(processCards, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_enabled', type: 'trigger', default: true }, field: { name: 'Увімкнути модуль міток' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_theme',
+                type: 'select',
+                values: {
+                    mono: 'Монохромні',
+                    color: 'Кольорові'
+                },
+                default: 'mono'
+            },
+            field: {
+                name: 'Стиль міток',
+                description: 'Оформлення бейджів: монохромні (темні) або кольорові'
+            },
+            onChange: function () { refreshAllMarks(); }
+        });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_ua', type: 'trigger', default: true }, field: { name: 'Показувати мітку UA' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_4k', type: 'trigger', default: true }, field: { name: 'Показувати мітку 4K' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_fhd', type: 'trigger', default: true }, field: { name: 'Показувати мітки 1080p / 720p' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_rating', type: 'trigger', default: true }, field: { name: 'Показувати мітку рейтингу' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_cache_clear', type: 'button' }, field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' }, onChange: function () { clearCache(); if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено'); refreshAllMarks(); } });
     }
 
