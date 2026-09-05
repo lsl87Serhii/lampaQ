@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v1.3
+     *  NFX Billboard — v1.4
      *  Netflix-подібний інтерфейс для Lampa (стандартний інтерфейс)
      *
      *  Складові:
@@ -17,10 +17,11 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_billboard';
-    var VERSION = '1.3';
+    var VERSION = '1.4';
 
     var CSS_ID = 'nfx-billboard-css';
     var ACCENT = '#e50914';
+    var SCALE = '1.28';
 
     // =================================================================
     //  0. Дрібні утиліти
@@ -95,7 +96,7 @@
 
         load: function (type) {
             var l = lang();
-            var key = 'nfx_genres_' + type + '_' + l;
+            var key = 'nfxc_genres_' + type + '_' + l;
             var cached = S(key, null);
 
             if (cached && typeof cached === 'object') {
@@ -147,7 +148,7 @@
 
     var LogoEngine = {
         key: function (type, id, l) {
-            return 'nfx_logo_' + type + '_' + id + '_' + l;
+            return 'nfxc_logo_' + type + '_' + id + '_' + l;
         },
 
         getCached: function (k) {
@@ -271,18 +272,10 @@
             logoBox.appendChild(fallback);
             hero.appendChild(logoBox);
 
-            if (isOn('nfx_chips', true)) {
-                var q = cardEl.querySelector('.card__quality');
-                if (q && q.textContent.trim()) {
-                    var chips = el('div', 'nfx-hero__chips');
-                    var chip = el('div', 'nfx-chip');
-                    chip.textContent = q.textContent.trim();
-                    chips.appendChild(chip);
-                    hero.appendChild(chips);
-                }
-            }
-
-            view.appendChild(hero);
+            // hero кладемо ПІД рідний вміст картки — тоді бейджі якості
+            // (у т.ч. намальовані іншими плагінами) лишаються зверху
+            if (view.firstChild) view.insertBefore(hero, view.firstChild);
+            else view.appendChild(hero);
 
             if (isOn('nfx_logo', true)) {
                 LogoEngine.resolve(data, function (url) {
@@ -633,6 +626,65 @@
         }
     };
 
+
+    // =================================================================
+    //  5b. Вигляд карток (premium — як у NFX Premium Style)
+    // =================================================================
+
+    var CardStyle = {
+        observer: null,
+        timer: null,
+
+        enabled: function () {
+            return S('nfx_card_style', 'plain') === 'premium';
+        },
+
+        /** Крайні картки масштабуються від свого краю, щоб не вилазити за екран */
+        tagEdges: function () {
+            var rows = document.querySelectorAll('.scroll__body');
+            for (var r = 0; r < rows.length; r++) {
+                var cards = rows[r].querySelectorAll('.card');
+                if (!cards.length) continue;
+                for (var c = 0; c < cards.length; c++) cards[c].removeAttribute('data-nfx-edge');
+                cards[0].setAttribute('data-nfx-edge', 'first');
+                cards[cards.length - 1].setAttribute('data-nfx-edge', 'last');
+            }
+        },
+
+        start: function () {
+            if (this.observer) return;
+
+            var self = this;
+            document.body.classList.add('nfx-premium');
+
+            this.observer = new MutationObserver(function () {
+                clearTimeout(self.timer);
+                self.timer = setTimeout(self.tagEdges, 120);
+            });
+            this.observer.observe(document.body, { childList: true, subtree: true });
+
+            this.tagEdges();
+        },
+
+        stop: function () {
+            document.body.classList.remove('nfx-premium');
+
+            if (this.observer) {
+                this.observer.disconnect();
+                this.observer = null;
+            }
+            clearTimeout(this.timer);
+
+            var tagged = document.querySelectorAll('[data-nfx-edge]');
+            for (var i = 0; i < tagged.length; i++) tagged[i].removeAttribute('data-nfx-edge');
+        },
+
+        sync: function () {
+            if (this.enabled()) this.start();
+            else this.stop();
+        }
+    };
+
     // =================================================================
     //  6. CSS
     // =================================================================
@@ -732,21 +784,71 @@
             ' font-size: 0.85em; font-weight: 700; color: #fff;' +
             ' background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.25); }');
 
-        /* ── вигляд карток у ряду ── */
+        /* ── біла обводка обраної картки 16:9 (як у Netflix) ── */
+        css.push('.items-line--nfx .card.nfx-open .card__view {' +
+            ' box-shadow: inset 0 0 0 0.14em rgba(255,255,255,0.95) !important; }');
+
+        /* ── бейджі якості/рейтингу на розгорнутій картці ── */
+        if (!isOn('nfx_chips', true)) {
+            css.push('.items-line--nfx .card.nfx-open .card__quality,' +
+                ' .items-line--nfx .card.nfx-open .card__vote { display: none !important; }');
+        }
+
+        /* ── premium: масштаб у фокусі, зсув сусідів, підсвітка ── */
         if (premium) {
-            css.push('.items-line--nfx .card__view { box-shadow: 0 0 0 0.16em transparent; }');
-            css.push('.items-line--nfx .card.focus .card__view, .items-line--nfx .card.hover .card__view {' +
-                ' box-shadow: 0 0 0 0.16em ' + ACCENT + ', 0 0 1.4em rgba(229,9,20,0.45), 0 0.8em 2em rgba(0,0,0,0.6); }');
-            css.push('.items-line--nfx .card__quality { position: absolute !important;' +
+            // нічого не має обрізати збільшену картку
+            css.push('body.nfx-premium .items-line,' +
+                ' body.nfx-premium .items-line__body,' +
+                ' body.nfx-premium .items-cards,' +
+                ' body.nfx-premium .scroll--horizontal,' +
+                ' body.nfx-premium .scroll__content,' +
+                ' body.nfx-premium .scroll__body { overflow: visible !important; }');
+
+            css.push('body.nfx-premium .items-line { padding-top: 1.4em; padding-bottom: 2.6em; }');
+
+            css.push('body.nfx-premium .card {' +
+                ' transform-origin: center center;' +
+                ' -webkit-transition: -webkit-transform 0.3s ease;' +
+                ' transition: transform 0.3s ease; }');
+
+            // рідне підстрибування Lampa конфліктує з масштабом
+            css.push('body.nfx-premium .card.focus .card__view,' +
+                ' body.nfx-premium .card.hover .card__view,' +
+                ' body.nfx-premium .card.animate-trigger-enter .card__view {' +
+                ' animation: none !important; -webkit-animation: none !important; }');
+
+            css.push('body.nfx-premium .card.focus, body.nfx-premium .card.hover {' +
+                ' z-index: 100; transform: scale3d(' + SCALE + ',' + SCALE + ',1); }');
+            css.push('body.nfx-premium .card.focus ~ .card,' +
+                ' body.nfx-premium .card.hover ~ .card { transform: translate3d(18%,0,0); }');
+
+            css.push('body.nfx-premium .card[data-nfx-edge="first"].focus,' +
+                ' body.nfx-premium .card[data-nfx-edge="first"].hover { transform-origin: left center; }');
+            css.push('body.nfx-premium .card[data-nfx-edge="last"].focus,' +
+                ' body.nfx-premium .card[data-nfx-edge="last"].hover { transform-origin: right center; }');
+
+            css.push('body.nfx-premium .card__view {' +
+                ' border-radius: ' + radius + ';' +
+                ' box-shadow: 0 0 0 0.12em transparent;' +
+                ' -webkit-transition: box-shadow 0.3s ease; transition: box-shadow 0.3s ease; }');
+            css.push('body.nfx-premium .card__img { border-radius: ' + radius + '; }');
+            css.push('body.nfx-premium .card.focus .card__view,' +
+                ' body.nfx-premium .card.hover .card__view {' +
+                ' box-shadow: 0 0 0 0.12em ' + ACCENT + ', 0 0 1.2em rgba(229,9,20,0.5), 0 0.6em 1.8em rgba(0,0,0,0.6); }');
+
+            css.push('body.nfx-premium .card__quality { position: absolute !important;' +
                 ' left: 0.4em !important; bottom: 0.4em !important; top: auto !important; right: auto !important;' +
                 ' z-index: 5; padding: 0.15em 0.5em; border-radius: 0.25em;' +
                 ' font-size: 0.8em; font-weight: 700; text-transform: uppercase;' +
                 ' color: #fff; background: rgba(46,204,113,0.9) !important; }');
-            css.push('.items-line--nfx .card__vote { display: none !important; }');
-            css.push('.items-line--nfx .card.nfx-open .card__quality { display: none !important; }');
-        } else {
-            css.push('.items-line--nfx .card.nfx-open.focus .card__view {' +
-                ' box-shadow: inset 0 0 0 0.18em rgba(255,255,255,0.9); }');
+
+            // у ряду-білборді масштаб не потрібен — там своя механіка 16:9
+            css.push('body.nfx-premium .items-line--nfx .card.focus,' +
+                ' body.nfx-premium .items-line--nfx .card.hover,' +
+                ' body.nfx-premium .items-line--nfx .card.focus ~ .card,' +
+                ' body.nfx-premium .items-line--nfx .card.hover ~ .card {' +
+                ' transform: none !important; z-index: 1 !important; }');
+            css.push('body.nfx-premium .items-line--nfx .card.nfx-open { z-index: 2 !important; }');
         }
 
         /* ── блок під рядом ── */
@@ -779,10 +881,28 @@
     //  7. Застосування налаштувань (без перезапуску)
     // =================================================================
 
+    /** Тільки ці ключі є налаштуваннями. Кеш (nfxc_*) сюди не потрапляє. */
+    var SETTING_KEYS = [
+        'nfx_nav', 'nfx_nav_items', 'nfx_bg', 'nfx_card_style', 'nfx_radius',
+        'nfx_titles', 'nfx_row', 'nfx_scope', 'nfx_pin', 'nfx_wide',
+        'nfx_info', 'nfx_logo', 'nfx_logo_lang', 'nfx_chips'
+    ];
+
+    function isSettingKey(name) {
+        return SETTING_KEYS.indexOf(name) > -1;
+    }
+
+    var applyTimer = null;
+
+    /** SettingsApi.onChange і Storage.change приходять парою — склеюємо в один прохід */
     function applyAll() {
-        injectCSS();
-        Nav.sync();
-        Billboard.sync();
+        clearTimeout(applyTimer);
+        applyTimer = setTimeout(function () {
+            injectCSS();
+            CardStyle.sync();
+            Nav.sync();
+            Billboard.sync();
+        }, 120);
     }
 
     // =================================================================
@@ -951,12 +1071,13 @@
         initSettings();
         injectCSS();
         Genres.loadAll();
+        CardStyle.sync();
         Billboard.init();
         Nav.init();
 
         if (Lampa.Storage && Lampa.Storage.listener) {
             Lampa.Storage.listener.follow('change', function (e) {
-                if (e.name && e.name.indexOf('nfx_') === 0) applyAll();
+                if (e.name && isSettingKey(e.name)) applyAll();
             });
         }
 
