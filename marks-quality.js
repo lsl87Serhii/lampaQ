@@ -4,7 +4,7 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v21';
+    var CACHE_KEY = 'marks_quality_cache_v22';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
@@ -415,7 +415,7 @@
             }
         }
 
-        if (data.hdr && isSettingEnabled('marks_hdr', true)) {
+        if (data.hdr && isSettingEnabled('marks_hdr', false)) {
             container.append(createBadge('hdr', data.dolbyVision ? 'DV' : 'HDR'));
         }
 
@@ -472,9 +472,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v21')) return;
+        if (document.getElementById('likhtar-marks-style-v22')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v21';
+        style.id = 'likhtar-marks-style-v22';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -563,6 +563,7 @@
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_ua', type: 'trigger', default: true }, field: { name: 'Показувати мітку UA' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_4k', type: 'trigger', default: true }, field: { name: 'Показувати мітку 4K' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_fhd', type: 'trigger', default: true }, field: { name: 'Показувати мітки 1080p / 720p' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_hdr', type: 'trigger', default: false }, field: { name: 'Показувати мітку HDR / DV' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_rating', type: 'trigger', default: true }, field: { name: 'Показувати мітку рейтингу' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_cache_clear', type: 'button' }, field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' }, onChange: function () { clearCache(); if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено'); refreshAllMarks(); } });
     }
