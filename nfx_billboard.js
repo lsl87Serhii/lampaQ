@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v1.5
+     *  NFX Billboard — v1.6
      *  Netflix-подібний інтерфейс для Lampa (стандартний інтерфейс)
      *
      *    A. Шапка: пошук + вкладки + налаштування, по центру екрана
@@ -16,8 +16,10 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_billboard';
-    var VERSION = '1.5';
+    var VERSION = '1.6';
     var CSS_ID = 'nfx-billboard-css';
+    var ANIM = 300;                                 // тривалість переходу, мс
+    var EASE = 'cubic-bezier(0.4, 0, 0.2, 1)';      // спільна крива для ширин і зсуву
 
     // =================================================================
     //  0. Утиліти
@@ -289,14 +291,52 @@
                 LogoEngine.mount(logoBox, data, 'nfx-hero__logo');
             }
 
-            // Обводка окремим шаром: inset-тінь на .card__view перекривається
-            // вмістом картки, а цей шар лежить поверх усього.
-            hero.appendChild(el('div', 'nfx-hero__stroke'));
-
             // hero кладемо ПІД рідний вміст картки, щоб бейджі інших
             // плагінів лишались видимими
             if (view.firstChild) view.insertBefore(hero, view.firstChild);
             else view.appendChild(hero);
+
+            return hero;
+        },
+
+        /**
+         * Нерухома рамка 16:9.
+         * Обводка не може належати картці: картка їде вліво і стискається,
+         * а рамка у Netflix стоїть на місці. Тому це окремий шар над рядом,
+         * у ньому ж згасає кадр попереднього тайтлу.
+         */
+        ensureFrame: function (ctx) {
+            if (ctx.frame) return ctx.frame;
+
+            var body = ctx.lineEl.querySelector('.items-line__body');
+            if (!body) return null;
+
+            var frame = el('div', 'nfx-frame');
+            frame.appendChild(el('div', 'nfx-frame__stroke'));
+            body.appendChild(frame);
+
+            ctx.frame = frame;
+            return frame;
+        },
+
+        /** Підігнати рамку під геометрію розгорнутої картки */
+        placeFrame: function (ctx) {
+            if (!ctx.frame || !ctx.current) return;
+
+            var view = ctx.current.querySelector('.card__view');
+            var body = ctx.lineEl.querySelector('.items-line__body');
+            if (!view || !body) return;
+
+            var a = view.getBoundingClientRect();
+            var b = body.getBoundingClientRect();
+
+            if (!a.width || !a.height) return;
+
+            ctx.frame.style.left = (a.left - b.left) + 'px';
+            ctx.frame.style.top = (a.top - b.top) + 'px';
+            ctx.frame.style.width = a.width + 'px';
+            ctx.frame.style.height = a.height + 'px';
+            ctx.frame.classList.add('nfx-frame--on');
         },
 
         /** Блок під рядом: два шари для крос-фейду */
@@ -353,7 +393,10 @@
                 info: isOn('nfx_info', true) ? this.buildInfo(lineEl) : null,
                 current: null,
                 timer: null,
-                module: null
+                module: null,
+                frame: null,
+                ready: false,
+                pw: 0
             };
 
             ctx.decorate = function () {
@@ -365,29 +408,120 @@
                 }
             };
 
+            /** .scroll__body цього ряду — саме йому Lampa ставить transform */
+            ctx.body = function () {
+                return lineEl.querySelector('.items-line__body .scroll__body');
+            };
+
+            /**
+             * Куди має від'їхати ряд, щоб обрана картка стала точно в рамку.
+             *
+             * Рахуємо аналітично, а не з живої геометрії: під час анімації
+             * getBoundingClientRect віддає проміжні значення, і позиція
+             * поїхала б. Формула: ліве прибиття це transform = -offsetLeft,
+             * а offsetLeft зміниться на (E - W), якщо картка, що згортається,
+             * стоїть лівіше за нову.
+             */
+            ctx.target = function (m) {
+                var body = ctx.body();
+                if (!body) return null;
+
+                var left = m.nextLeft;
+
+                // картка, що згортається, стоїть лівіше — усе правіше неї
+                // зʼїде на різницю між рамкою і постером
+                if (m.prevLeft >= 0 && m.prevLeft < m.nextLeft) {
+                    left -= (m.prevWidth - m.poster);
+                }
+
+                // навмисно без обмеження по кінцю ряду: обрана картка
+                // має стояти в рамці завжди, навіть якщо праворуч
+                // лишиться порожньо
+                return -Math.max(0, left);
+            };
+
+            /**
+             * Ширина звичайного постера. Кешуємо: у короткому ряду під час
+             * переходу може не лишитись жодної згорнутої картки для заміру.
+             */
+            ctx.posterWidth = function (except) {
+                if (ctx.pw) return ctx.pw;
+
+                var cards = ctx.lineEl.querySelectorAll('.items-line__body .card');
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i] !== except && !cards[i].classList.contains('nfx-open') && cards[i].offsetWidth) {
+                        ctx.pw = cards[i].offsetWidth;
+                        return ctx.pw;
+                    }
+                }
+                return 0;
+            };
+
             ctx.open = function (item) {
                 if (!item) return;
 
-                var cardEl = item.render(true);
-                if (!cardEl || ctx.current === cardEl) return;
+                var nextEl = item.render(true);
+                if (!nextEl || ctx.current === nextEl) return;
 
-                if (ctx.current) {
-                    ctx.current.classList.remove('nfx-open');
-                    remove(ctx.current.querySelector('.nfx-hero'));
+                var prevEl = ctx.current;
+                var data = item.data || nextEl.card_data || {};
+                var animate = !!prevEl && ctx.ready;
+
+                // заміри робимо ДО зміни класів: після зняття nfx-open
+                // ширина попередньої картки вже буде постерною
+                var m = {
+                    nextLeft: nextEl.offsetLeft,
+                    prevLeft: prevEl ? prevEl.offsetLeft : -1,
+                    prevWidth: prevEl ? prevEl.offsetWidth : 0,
+                    poster: ctx.posterWidth(nextEl)
+                };
+
+                // 1. кадр попереднього тайтлу перекладаємо в нерухому рамку
+                //    і гасимо — саме так виглядає перехід у Netflix
+                if (prevEl) {
+                    var oldHero = prevEl.querySelector('.nfx-hero');
+                    if (oldHero && ctx.frame && animate) {
+                        oldHero.classList.add('nfx-hero--out');
+                        ctx.frame.insertBefore(oldHero, ctx.frame.firstChild);
+                        setTimeout(function () { remove(oldHero); }, ANIM + 60);
+                        requestAnimationFrame(function () { oldHero.style.opacity = '0'; });
+                    } else {
+                        remove(oldHero);
+                    }
+                    prevEl.classList.remove('nfx-open');
                 }
 
-                ctx.current = cardEl;
-                cardEl.classList.add('nfx-open');
+                // 2. позиція рахується з мірок, знятих до зміни класів
+                var to = animate ? ctx.target(m) : null;
 
-                var data = item.data || cardEl.card_data || {};
+                ctx.current = nextEl;
+                nextEl.classList.add('nfx-open');
 
-                self.buildHero(cardEl, data);
+                self.buildHero(nextEl, data);
                 self.renderInfo(ctx.info, data);
                 ctx.decorate();
 
-                // ширина міняється миттєво, тому геометрія вже фінальна
-                if (S('nfx_pin', 'left') === 'left' && line.scroll) {
-                    line.scroll.update(cardEl, false);
+                // 3. ширина карток і зсув ряду їдуть одночасно, однією
+                //    тривалістю — інакше картка спершу росте, потім ряд їде
+                var body = ctx.body();
+
+                if (animate && body && to !== null && S('nfx_pin', 'left') === 'left') {
+                    body.style.transition = 'transform ' + ANIM + 'ms ' + EASE;
+                    body.style.webkitTransition = '-webkit-transform ' + ANIM + 'ms ' + EASE;
+                    body.style.transform = 'translate3d(' + to + 'px, 0px, 0px)';
+                    body.style.webkitTransform = 'translate3d(' + to + 'px, 0px, 0px)';
+                } else if (S('nfx_pin', 'left') === 'left' && line.scroll) {
+                    line.scroll.update(nextEl, false);
+                }
+
+                // 4. перше відкриття — без анімації, далі вмикаємо
+                if (!ctx.ready) {
+                    setTimeout(function () {
+                        self.ensureFrame(ctx);
+                        self.placeFrame(ctx);
+                        ctx.lineEl.classList.add('items-line--nfx-anim');
+                        ctx.ready = true;
+                    }, 60);
                 }
             };
 
@@ -423,8 +557,11 @@
             }
 
             if (ctx.info) remove(ctx.info.box);
+            remove(ctx.frame);
+
             if (ctx.lineEl) {
                 ctx.lineEl.classList.remove('items-line--nfx');
+                ctx.lineEl.classList.remove('items-line--nfx-anim');
                 var logos = ctx.lineEl.querySelectorAll('.nfx-card-logo');
                 for (var i = 0; i < logos.length; i++) remove(logos[i]);
             }
@@ -441,6 +578,13 @@
         sync: function () {
             this.detach();
             if (isOn('nfx_row', true) && this.line) this.attach(this.line);
+        },
+
+        /** Рамка привʼязана до пікселів — після зміни розміру екрана переміряти */
+        remeasure: function () {
+            if (!this.ctx) return;
+            this.ctx.pw = 0;
+            this.placeFrame(this.ctx);
         },
 
         isTarget: function (line) {
@@ -460,6 +604,12 @@
 
         init: function () {
             var self = this;
+
+            var resizeTimer = null;
+            window.addEventListener('resize', function () {
+                clearTimeout(resizeTimer);
+                resizeTimer = setTimeout(function () { self.remeasure(); }, 200);
+            });
 
             Lampa.Listener.follow('line', function (e) {
                 if (e.type !== 'create') return;
@@ -702,7 +852,9 @@
     function injectCSS() {
         remove(document.getElementById(CSS_ID));
 
-        var wide = S('nfx_wide', '34em');
+        var wideEm = parseFloat(S('nfx_wide', '34em')) || 34;
+        var height = wideEm * 9 / 16;       // висота рамки 16:9
+        var poster = height / 1.5;          // постер 2:3 тієї ж висоти
         var radius = S('nfx_radius', '0.4em');
         var titles = isOn('nfx_titles', false) ? 'block' : 'none';
         var blackBg = S('nfx_bg', 'lampa') === 'black';
@@ -753,10 +905,20 @@
 
         /* ── ряд ── */
         css.push('.items-line--nfx { padding-bottom: 1.4em !important; }');
+        css.push('.items-line--nfx .items-line__body { position: relative; }');
         css.push('.items-line--nfx .card__title, .items-line--nfx .card__age { display: ' + titles + ' !important; }');
-        css.push('.items-line--nfx .card { transition: none !important; }');
-        css.push('.items-line--nfx .card__view { margin-bottom: 0.3em !important; overflow: hidden; border-radius: ' + radius + '; }');
+
+        // Висота ряду не змінюється: постер 2:3 і кадр 16:9 мають однакову
+        // висоту, тому ширина постера жорстко привʼязана до ширини рамки.
+        css.push('.items-line--nfx .card { width: ' + poster + 'em !important; }');
+        css.push('.items-line--nfx .card__view { margin-bottom: 0.3em !important; overflow: hidden;' +
+            ' border-radius: ' + radius + '; height: ' + height + 'em !important; padding-bottom: 0 !important; }');
         css.push('.items-line--nfx .card__img { border-radius: ' + radius + '; }');
+
+        // анімація вмикається лише після першого відкриття
+        css.push('.items-line--nfx-anim .card {' +
+            ' -webkit-transition: width ' + ANIM + 'ms ' + EASE + ';' +
+            ' transition: width ' + ANIM + 'ms ' + EASE + '; }');
 
         // Lampa підстрибує карткою у фокусі (animation-card-focus) — гасимо
         css.push('.items-line--nfx .card.focus .card__view,' +
@@ -765,9 +927,19 @@
             ' animation: none !important; -webkit-animation: none !important; }');
 
         /* ── розгорнута картка 16:9 ── */
-        css.push('.items-line--nfx .card.nfx-open { width: ' + wide + ' !important; }');
-        css.push('.items-line--nfx .card.nfx-open .card__view { padding-bottom: 56.25% !important; }');
+        css.push('.items-line--nfx .card.nfx-open { width: ' + wideEm + 'em !important; }');
         css.push('.items-line--nfx .card.nfx-open .card__img { opacity: 0; }');
+
+        /* нерухома рамка 16:9 */
+        css.push('.nfx-frame { position: absolute; z-index: 6; pointer-events: none;' +
+            ' opacity: 0; border-radius: ' + radius + '; overflow: hidden; }');
+        css.push('.nfx-frame--on { opacity: 1; }');
+        css.push('.nfx-frame__stroke { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
+            ' z-index: 2; border-radius: ' + radius + '; border: 0.14em solid #fff; }');
+        css.push('.nfx-hero--out { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
+            ' z-index: 1; border-radius: ' + radius + ';' +
+            ' -webkit-transition: opacity ' + ANIM + 'ms ' + EASE + ';' +
+            ' transition: opacity ' + ANIM + 'ms ' + EASE + '; }');
 
         css.push('.nfx-hero { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
             ' border-radius: ' + radius + '; overflow: hidden; }');
@@ -777,9 +949,6 @@
             ' background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%); }');
 
         // біла обводка — окремий шар поверх усього, тому не зникає
-        css.push('.nfx-hero__stroke { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
-            ' z-index: 4; pointer-events: none; border-radius: ' + radius + ';' +
-            ' border: 0.14em solid #fff; }');
 
         css.push('.nfx-hero__logo { position: absolute; left: 1.2em; bottom: 1.1em; z-index: 3;' +
             ' max-width: 60%; max-height: 45%; display: flex; align-items: flex-end; }');
@@ -870,7 +1039,6 @@
 
         /* ── малі екрани ── */
         css.push('@media screen and (max-width: 767px) {' +
-            ' .items-line--nfx .card.nfx-open { width: 22em !important; }' +
             ' .nfx-info { min-height: 5.8em; padding: 0 1em; }' +
             ' .nfx-info__layer { left: 1em; right: 1em; }' +
             ' .nfx-hero__logo__img { max-height: 3.5em; }' +
