@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v1.7
+     *  NFX Billboard — v1.9
      *  Netflix-подібний інтерфейс для Lampa (стандартний інтерфейс)
      *
      *    A. Шапка: пошук + вкладки + налаштування, по центру екрана
@@ -16,7 +16,7 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_billboard';
-    var VERSION = '1.7';
+    var VERSION = '1.9';
     var CSS_ID = 'nfx-billboard-css';
     /**
      * Тривалість і крива переходу.
@@ -138,6 +138,103 @@
         }
     };
 
+
+    // =================================================================
+    //  2. Логотип тайтлу для картки 16:9
+    //
+    //  На звичайних постерах назва вже намальована в самій картинці.
+    //  У кадрі (backdrop) її немає, тому для розгорнутої картки беремо
+    //  логотип з TMDB і показуємо рівно того ж розміру, що й на постері.
+    //  Кеш під префіксом nfxc_ — щоб запис не сприймався як зміна
+    //  налаштування і не перебудовував ряд.
+    // =================================================================
+
+    var LogoEngine = {
+        key: function (type, id, l) {
+            return 'nfxc_logo_' + type + '_' + id + '_' + l;
+        },
+
+        getCached: function (k) {
+            try {
+                var v = sessionStorage.getItem(k);
+                if (v) return v;
+            } catch (e) { /* ignore */ }
+            return S(k, null);
+        },
+
+        setCached: function (k, v) {
+            var val = v || 'none';
+            try { sessionStorage.setItem(k, val); } catch (e) { /* ignore */ }
+            try { Lampa.Storage.set(k, val); } catch (e) { /* ignore */ }
+        },
+
+        pick: function (logos, target) {
+            if (!logos || !logos.length) return null;
+
+            // PNG стабільніші за SVG на старому WebKit
+            var sorted = logos.slice().sort(function (a, b) {
+                var aSvg = (a.file_path || '').toLowerCase().indexOf('.svg') > -1;
+                var bSvg = (b.file_path || '').toLowerCase().indexOf('.svg') > -1;
+                return aSvg === bSvg ? 0 : (aSvg ? 1 : -1);
+            });
+
+            var order = [target];
+            if (order.indexOf('en') === -1) order.push('en');
+
+            var i, j;
+            for (j = 0; j < order.length; j++) {
+                for (i = 0; i < sorted.length; i++) {
+                    if (sorted[i].iso_639_1 === order[j] && sorted[i].file_path) return sorted[i].file_path;
+                }
+            }
+
+            return sorted[0] && sorted[0].file_path ? sorted[0].file_path : null;
+        },
+
+        resolve: function (data, done) {
+            if (!data || !data.id) return done(null);
+
+            var type = data.name ? 'tv' : 'movie';
+            var l = S('nfx_logo_lang', 'uk') === 'en' ? 'en' : 'uk';
+            var k = this.key(type, data.id, l);
+            var cached = this.getCached(k);
+
+            if (cached === 'none') return done(null);
+            if (cached) return done(cached);
+
+            var self = this;
+            var url;
+
+            try {
+                url = Lampa.TMDB.api(
+                    type + '/' + data.id + '/images?api_key=' + Lampa.TMDB.key() +
+                    '&include_image_language=' + (l === 'en' ? 'en,null' : l + ',en,null')
+                );
+            } catch (e) { return done(null); }
+
+            $.get(url, function (res) {
+                var path = self.pick(res && res.logos, l);
+                if (path) {
+                    var img = tmdbImage(path.replace('.svg', '.png'), 'w300');
+                    self.setCached(k, img);
+                    done(img);
+                } else {
+                    self.setCached(k, 'none');
+                    done(null);
+                }
+            }).fail(function () { done(null); });
+        },
+
+        mount: function (box, data) {
+            this.resolve(data, function (url) {
+                if (!url || !box.parentNode) return;
+                var img = el('img', 'nfx-hero__logo-img');
+                img.src = url;
+                box.appendChild(img);
+            });
+        }
+    };
+
     // =================================================================
     //  3. Ряд-білборд
     // =================================================================
@@ -171,6 +268,13 @@
             var img = el('img', 'nfx-hero__img');
             img.src = tmdbImage(data.backdrop_path, 'w780') || tmdbImage(data.poster_path, 'w500');
             hero.appendChild(img);
+
+            // затемнення знизу, щоб логотип читався на світлому кадрі
+            hero.appendChild(el('div', 'nfx-hero__shade'));
+
+            var logoBox = el('div', 'nfx-hero__logo');
+            hero.appendChild(logoBox);
+            LogoEngine.mount(logoBox, data);
 
             // hero кладемо ПІД рідний вміст картки, щоб бейджі інших
             // плагінів лишались видимими
@@ -860,6 +964,19 @@
         css.push('.nfx-hero { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
             ' border-radius: ' + radius + '; overflow: hidden; }');
         css.push('.nfx-hero__img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }');
+        css.push('.nfx-hero__shade { position: absolute; left: 0; right: 0; bottom: 0; height: 55%; z-index: 2;' +
+            ' background: -webkit-linear-gradient(top, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%);' +
+            ' background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%); }');
+
+        // Розмір логотипа привʼязаний до ширини ПОСТЕРА, а не рамки —
+        // щоб на картці 16:9 назва виглядала так само, як на сусідніх.
+        css.push('.nfx-hero__logo { position: absolute; left: 0.9em; bottom: 0.8em; z-index: 3;' +
+            ' max-width: ' + (poster * 0.8).toFixed(2) + 'em;' +
+            ' max-height: ' + (poster * 0.30).toFixed(2) + 'em;' +
+            ' display: flex; align-items: flex-end; pointer-events: none; }');
+        css.push('.nfx-hero__logo-img { max-width: 100%; max-height: 100%; width: auto; height: auto;' +
+            ' object-fit: contain; object-position: left bottom;' +
+            ' filter: drop-shadow(0 2px 10px rgba(0,0,0,0.8)); }');
 
         /* ── блок під рядом ── */
         css.push('.nfx-info { position: relative; margin: 0.1em 0 0 0; padding: 0 1.5em; min-height: 6.6em; }');
@@ -948,7 +1065,7 @@
     var SETTING_KEYS = [
         'nfx_nav', 'nfx_nav_items', 'nfx_bg', 'nfx_full', 'nfx_radius',
         'nfx_titles', 'nfx_row', 'nfx_scope', 'nfx_pin', 'nfx_wide',
-        'nfx_info', 'nfx_speed', 'nfx_focus'
+        'nfx_info', 'nfx_speed', 'nfx_focus', 'nfx_logo_lang'
     ];
 
     function isSettingKey(name) {
@@ -996,6 +1113,7 @@
             pin_center: 'По центру (як у Lampa)',
             wide: 'Ширина розгорнутої картки',
             info: 'Блок опису під рядом',
+            logo_lang: 'Мова логотипу на картці 16:9',
             speed: 'Швидкість переходу',
             sp_fast: 'Швидко (260 мс)',
             sp_nfx: 'Як у Netflix (380 мс)',
@@ -1029,6 +1147,7 @@
             pin_center: 'По центру (как в Lampa)',
             wide: 'Ширина развёрнутой карточки',
             info: 'Блок описания под рядом',
+            logo_lang: 'Язык логотипа на карточке 16:9',
             speed: 'Скорость перехода',
             sp_fast: 'Быстро (260 мс)',
             sp_nfx: 'Как в Netflix (380 мс)',
@@ -1062,6 +1181,7 @@
             pin_center: 'Center (Lampa default)',
             wide: 'Expanded card width',
             info: 'Description block under row',
+            logo_lang: 'Logo language on the 16:9 card',
             speed: 'Transition speed',
             sp_fast: 'Fast (260 ms)',
             sp_nfx: 'Netflix (380 ms)',
@@ -1106,6 +1226,8 @@
             { name: 'nfx_wide', type: 'select', def: '34em', title: t('wide'),
               values: { '28em': '2.2x', '31em': '2.4x', '34em': '2.7x (16:9)', '38em': '3.0x' } },
             { name: 'nfx_info', type: 'trigger', def: true, title: t('info') },
+            { name: 'nfx_logo_lang', type: 'select', def: 'uk', title: t('logo_lang'),
+              values: { uk: 'Українська', en: 'English' } },
             { name: 'nfx_speed', type: 'select', def: '380', title: t('speed'),
               values: { '260': t('sp_fast'), '380': t('sp_nfx'), '500': t('sp_slow') } },
             { name: 'nfx_focus', type: 'select', def: 'shadow', title: t('focus'),
