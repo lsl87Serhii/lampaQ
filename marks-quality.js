@@ -4,7 +4,7 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v19';
+    var CACHE_KEY = 'marks_quality_cache_v21';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
@@ -472,9 +472,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v19')) return;
+        if (document.getElementById('likhtar-marks-style-v21')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v19';
+        style.id = 'likhtar-marks-style-v21';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -490,7 +490,7 @@
             }\
             .likhtar-marks-container {\
                 position: absolute;\
-                top: 0.5em;\
+                bottom: 0.5em;\
                 left: 0.4em;\
                 display: flex;\
                 flex-direction: column;\
@@ -519,14 +519,17 @@
             .likhtar-marks-badge--hdr { background: linear-gradient(135deg, #f57f17, #ffeb3b); color: #000; }\
             .likhtar-marks-badge--rating { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #ffd700; }\
             .likhtar-marks-badge--year { background: linear-gradient(135deg, #212121, #4e4e4e); }\
-            .likhtar-marks-star { margin-right: 0.15em; }\
+            .likhtar-marks-star { margin-right: 0.15em; color: #ffd700; }\
             .likhtar-marks-container.likhtar-marks-mono .likhtar-marks-badge {\
                 background: linear-gradient(135deg, #1a1a2e, #16213e) !important;\
                 color: #ffffff !important;\
                 border: 1px solid rgba(255,255,255,0.25) !important;\
             }\
+            .likhtar-marks-container.likhtar-marks-mono .likhtar-marks-badge--rating {\
+                color: #ffd700 !important;\
+            }\
             .likhtar-marks-container.likhtar-marks-mono .likhtar-marks-star {\
-                color: #ffffff !important;\
+                color: #ffd700 !important;\
             }\
         ';
         (document.head || document.documentElement).appendChild(style);
