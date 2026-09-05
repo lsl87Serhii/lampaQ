@@ -4,7 +4,7 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v22';
+    var CACHE_KEY = 'marks_quality_cache_v25';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
@@ -400,6 +400,15 @@
             container.removeClass('likhtar-marks-mono');
         }
 
+        var pos = Lampa.Storage.get('marks_position', 'bottom_right');
+        var align = Lampa.Storage.get('marks_align', 'vertical');
+
+        container.removeClass('likhtar-marks-pos--top_left likhtar-marks-pos--top_right likhtar-marks-pos--bottom_left likhtar-marks-pos--bottom_right')
+                 .addClass('likhtar-marks-pos--' + pos);
+
+        container.removeClass('likhtar-marks-align--vertical likhtar-marks-align--horizontal')
+                 .addClass('likhtar-marks-align--' + align);
+
         if (data.ukr && isSettingEnabled('marks_ua', true)) container.append(createBadge('ua', 'UA'));
         if (data.eng && isSettingEnabled('marks_en', true)) container.append(createBadge('en', 'EN'));
 
@@ -472,9 +481,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v22')) return;
+        if (document.getElementById('likhtar-marks-style-v25')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v22';
+        style.id = 'likhtar-marks-style-v25';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -490,13 +499,58 @@
             }\
             .likhtar-marks-container {\
                 position: absolute;\
-                bottom: 0.5em;\
-                left: 0.4em;\
                 display: flex;\
-                flex-direction: column;\
                 gap: 0.2em;\
+                max-width: 92%;\
                 z-index: 20;\
                 pointer-events: none;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--vertical {\
+                flex-direction: column !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--horizontal {\
+                flex-direction: row !important;\
+                flex-wrap: wrap !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-pos--top_left {\
+                top: 0.5em;\
+                left: 0.4em;\
+                bottom: auto;\
+                right: auto;\
+            }\
+            .likhtar-marks-container.likhtar-marks-pos--top_right {\
+                top: 0.5em;\
+                right: 0.4em;\
+                bottom: auto;\
+                left: auto;\
+            }\
+            .likhtar-marks-container.likhtar-marks-pos--bottom_left {\
+                bottom: 0.5em;\
+                left: 0.4em;\
+                top: auto;\
+                right: auto;\
+            }\
+            .likhtar-marks-container.likhtar-marks-pos--bottom_right {\
+                bottom: 0.5em;\
+                right: 0.4em;\
+                top: auto;\
+                left: auto;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--vertical.likhtar-marks-pos--top_left,\
+            .likhtar-marks-container.likhtar-marks-align--vertical.likhtar-marks-pos--bottom_left {\
+                align-items: flex-start !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--vertical.likhtar-marks-pos--top_right,\
+            .likhtar-marks-container.likhtar-marks-align--vertical.likhtar-marks-pos--bottom_right {\
+                align-items: flex-end !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--horizontal.likhtar-marks-pos--top_left,\
+            .likhtar-marks-container.likhtar-marks-align--horizontal.likhtar-marks-pos--bottom_left {\
+                justify-content: flex-start !important;\
+            }\
+            .likhtar-marks-container.likhtar-marks-align--horizontal.likhtar-marks-pos--top_right,\
+            .likhtar-marks-container.likhtar-marks-align--horizontal.likhtar-marks-pos--bottom_right {\
+                justify-content: flex-end !important;\
             }\
             .likhtar-marks-badge {\
                 padding: 0.3em 0.45em;\
@@ -557,6 +611,42 @@
             field: {
                 name: 'Стиль міток',
                 description: 'Оформлення бейджів: монохромні (темні) або кольорові'
+            },
+            onChange: function () { refreshAllMarks(); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_position',
+                type: 'select',
+                values: {
+                    top_left: 'Верхній лівий кут',
+                    top_right: 'Верхній правий кут',
+                    bottom_left: 'Нижній лівий кут',
+                    bottom_right: 'Нижній правий кут'
+                },
+                default: 'bottom_right'
+            },
+            field: {
+                name: 'Розміщення міток',
+                description: 'Оберіть кут постера для відображення міток'
+            },
+            onChange: function () { refreshAllMarks(); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_align',
+                type: 'select',
+                values: {
+                    vertical: 'Вертикально',
+                    horizontal: 'Горизонтально'
+                },
+                default: 'vertical'
+            },
+            field: {
+                name: 'Орієнтація міток',
+                description: 'Напрямок розміщення бейджів (вертикально чи горизонтально)'
             },
             onChange: function () { refreshAllMarks(); }
         });
