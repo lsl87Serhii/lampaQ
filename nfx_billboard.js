@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard  v1.1
+     *  NFX Billboard  v1.2
      *
      *  1) Перший ряд у стилі Netflix TV:
      *     - картка у фокусі розгортається з постера (2:3) у backdrop (16:9)
@@ -15,7 +15,7 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_billboard';
-    var VERSION = '1.1';
+    var VERSION = '1.2';
 
     // ─────────────────────────────────────────────────────────────────
     //  Утиліти
@@ -250,7 +250,7 @@
         },
 
         change: function (data) {
-            var mode = S('nfx_bb_bg', 'poster');
+            var mode = S('nfx_bb_bg', 'off');
             if (mode === 'off' || !data) return;
 
             this.build();
@@ -294,7 +294,11 @@
     function metaLine(data) {
         var isTv = !!data.name;
         var type = isTv ? 'tv' : 'movie';
-        var parts = [typeWord(isTv)];
+        var parts = [];
+
+        var name = data.title || data.name || '';
+        if (name) parts.push(name);
+        else parts.push(typeWord(isTv));
 
         var g = Genres.names(type, data.genre_ids, 2);
         for (var i = 0; i < g.length; i++) parts.push(g[i]);
@@ -321,7 +325,6 @@
         var hero = el('div', 'nfx-hero');
 
         var img = el('img', 'nfx-hero__img');
-        img.onload = function () { img.classList.add('nfx-hero__img--in'); };
         img.src = tmdbImage(data.backdrop_path, 'w780') || tmdbImage(data.poster_path, 'w500');
         hero.appendChild(img);
 
@@ -352,8 +355,7 @@
                 var li = el('img', 'nfx-hero__logo-img');
                 li.onload = function () {
                     if (!hero.parentNode) return;
-                    fallback.style.opacity = '0';
-                    li.classList.add('nfx-hero__logo-img--in');
+                    fallback.style.display = 'none';
                 };
                 li.src = url;
                 logoBox.appendChild(li);
@@ -511,9 +513,9 @@
     // ─────────────────────────────────────────────────────────────────
 
     var NAV_PRESETS = {
-        basic: ['main', 'movie', 'tv'],
-        plus: ['main', 'movie', 'tv', 'catalog'],
-        full: ['main', 'movie', 'tv', 'anime', 'catalog', 'favorite']
+        basic: ['main', 'tv', 'movie'],
+        plus: ['main', 'tv', 'movie', 'catalog'],
+        full: ['main', 'tv', 'movie', 'anime', 'catalog', 'favorite']
     };
 
     var ICON_SETTINGS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -545,11 +547,9 @@
         if (!document.querySelector('.menu__item[data-action="main"]')) return false;
 
         var nav = el('div', 'nfx-nav');
-        var left = el('div', 'nfx-nav__left');
-        var right = el('div', 'nfx-nav__right');
+        var left = el('div', 'nfx-nav__group');
 
         nav.appendChild(left);
-        nav.appendChild(right);
         headBody.appendChild(nav);
 
         // ── пошук: переносимо існуючу іконку Lampa разом з її обробником ──
@@ -581,10 +581,6 @@
             left.appendChild(tab);
         });
 
-        // ── решта іконок шапки (fullscreen, іконки плагінів) ──
-        var actionsBox = document.querySelector('.head__actions');
-        if (actionsBox) right.appendChild(actionsBox);
-
         // ── налаштування Lampa на місці логотипа Netflix ──
         var settingsSrc = document.querySelector('.menu__item[data-action="settings"]');
         var btn = el('div', 'nfx-nav__settings selector');
@@ -594,7 +590,7 @@
             else if (window.Lampa && Lampa.Settings) Lampa.Settings.show({ category: 'main' });
         });
         trackFocus(btn);
-        right.appendChild(btn);
+        left.appendChild(btn);
 
         markActive(nav, 'main');
         document.body.classList.add('nfx-nav-on');
@@ -653,7 +649,7 @@
         var titles = isOn('nfx_bb_titles', false) ? 'block' : 'none';
         var blur = S('nfx_bb_blur', '2.5em');
         var dark = S('nfx_bb_bg_dark', '0.66');
-        var bgOff = S('nfx_bb_bg', 'poster') === 'off';
+        var bgOff = S('nfx_bb_bg', 'off') === 'off';
 
         var css = '' +
         /* ================= розмитий фон ================= */
@@ -680,36 +676,54 @@
         (bgOff ? '' : 'body .background { opacity: 0 !important; }') +
 
         /* ================= Netflix-шапка ================= */
-        '.nfx-nav { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }' +
-        '.nfx-nav__left { display: flex; align-items: center; flex: 1 1 auto; min-width: 0; }' +
-        '.nfx-nav__right { display: flex; align-items: center; flex-shrink: 0; }' +
-        '.nfx-nav__search { margin-right: 1.2em; }' +
+        '.nfx-nav { display: flex; align-items: center; justify-content: center; flex: 1 1 auto; min-width: 0; }' +
+
+        '.nfx-nav__group {' +
+        '  display: flex; align-items: center; justify-content: center;' +
+        '  max-width: 100%; overflow: hidden;' +
+        '}' +
+
+        /* пошук — просто іконка, без підкладки */
+        '.nfx-nav__search {' +
+        '  width: 2.2em; height: 2.2em; margin: 0 0.6em 0 0; padding: 0 !important;' +
+        '  display: flex !important; align-items: center; justify-content: center;' +
+        '  border-radius: 2em; color: #fff; background: none !important;' +
+        '}' +
+        '.nfx-nav__search svg { width: 1.35em; height: 1.35em; fill: currentColor; }' +
+        '.nfx-nav__search.focus, .nfx-nav__search:hover {' +
+        '  background: #fff !important; color: #000;' +
+        '}' +
 
         '.nfx-nav__tab {' +
-        '  padding: 0.45em 1.1em; margin-right: 0.4em;' +
-        '  border-radius: 2em; font-size: 1.05em; font-weight: 600;' +
-        '  color: rgba(255,255,255,0.72); white-space: nowrap; cursor: pointer;' +
-        '  -webkit-transition: background 0.2s ease, color 0.2s ease;' +
-        '  transition: background 0.2s ease, color 0.2s ease;' +
+        '  padding: 0.42em 1.15em; margin: 0 0.15em;' +
+        '  border-radius: 2em; font-size: 1.05em; font-weight: 700;' +
+        '  color: #fff; white-space: nowrap; cursor: pointer;' +
+        '  background: transparent;' +
         '}' +
-        '.nfx-nav__tab--active { color: #fff; }' +
-        '.nfx-nav__tab.focus, .nfx-nav__tab:hover { background: rgba(255,255,255,0.9); color: #000; }' +
+        /* активний розділ — напівпрозора пігулка */
+        '.nfx-nav__tab--active { background: rgba(255,255,255,0.22); color: #fff; }' +
+        /* під курсором/фокусом — суцільна біла */
+        '.nfx-nav__tab.focus, .nfx-nav__tab:hover { background: #fff !important; color: #000 !important; }' +
 
         '.nfx-nav__settings {' +
-        '  width: 2.2em; height: 2.2em; margin-left: 0.8em;' +
+        '  width: 2.2em; height: 2.2em; margin-left: 0.6em;' +
         '  display: flex; align-items: center; justify-content: center;' +
-        '  border-radius: 50%; color: rgba(255,255,255,0.8); cursor: pointer;' +
+        '  border-radius: 2em; color: #fff; cursor: pointer; background: transparent;' +
         '}' +
-        '.nfx-nav__settings svg { width: 1.5em; height: 1.5em; }' +
-        '.nfx-nav__settings.focus, .nfx-nav__settings:hover { background: rgba(255,255,255,0.9); color: #000; }' +
+        '.nfx-nav__settings svg { width: 1.35em; height: 1.35em; }' +
+        '.nfx-nav__settings.focus, .nfx-nav__settings:hover { background: #fff; color: #000; }' +
 
+        /* прибираємо все зайве зі стандартної шапки */
         'body.nfx-nav-on .head__logo-icon,' +
         'body.nfx-nav-on .head__menu-icon,' +
         'body.nfx-nav-on .head__title,' +
         'body.nfx-nav-on .head__time,' +
-        'body.nfx-nav-on .head__markers { display: none !important; }' +
+        'body.nfx-nav-on .head__markers,' +
+        'body.nfx-nav-on .head__backward,' +
+        'body.nfx-nav-on .head__actions { display: none !important; }' +
 
-        'body.nfx-nav-on .head { background: none !important; box-shadow: none !important; }' +
+        'body.nfx-nav-on .head { box-shadow: none !important; }' +
+        'body.nfx-nav-on .head__body { justify-content: center; padding-top: 0.7em; padding-bottom: 0.7em; }' +
 
         /* бокове меню лишається робочим, але схованим (доступне рухом вліво) */
         'body.nfx-nav-on .wrap__left { width: 15em !important; margin-left: -15em !important; }' +
@@ -726,7 +740,7 @@
         '  margin-bottom: 0.6em; overflow: hidden; border-radius: ' + radius + ';' +
         '}' +
 
-        '.items-line--nfx .card__img { border-radius: ' + radius + '; transition: opacity 0.25s ease; }' +
+        '.items-line--nfx .card__img { border-radius: ' + radius + '; }' +
 
         '.items-line--nfx .card.nfx-open { width: ' + wide + ' !important; }' +
         '.items-line--nfx .card.nfx-open .card__view { padding-bottom: 56.25% !important; }' +
@@ -743,10 +757,8 @@
 
         '.nfx-hero__img {' +
         '  position: absolute; left: 0; top: 0; width: 100%; height: 100%;' +
-        '  object-fit: cover; opacity: 0;' +
-        '  -webkit-transition: opacity 0.35s ease; transition: opacity 0.35s ease;' +
+        '  object-fit: cover;' +
         '}' +
-        '.nfx-hero__img--in { opacity: 1; }' +
 
         '.nfx-hero__shade {' +
         '  position: absolute; left: 0; right: 0; bottom: 0; height: 55%;' +
@@ -762,17 +774,14 @@
         '.nfx-hero__name {' +
         '  font-size: 1.5em; font-weight: 800; line-height: 1.1; color: #fff;' +
         '  text-shadow: 0 2px 10px rgba(0,0,0,0.8);' +
-        '  -webkit-transition: opacity 0.3s ease; transition: opacity 0.3s ease;' +
         '}' +
 
         '.nfx-hero__logo-img {' +
         '  position: absolute; left: 0; bottom: 0;' +
         '  max-width: 100%; max-height: 5.5em; width: auto; height: auto;' +
-        '  object-fit: contain; object-position: left bottom; opacity: 0;' +
-        '  -webkit-transition: opacity 0.4s ease; transition: opacity 0.4s ease;' +
+        '  object-fit: contain; object-position: left bottom;' +
         '  filter: drop-shadow(0 3px 14px rgba(0,0,0,0.7));' +
         '}' +
-        '.nfx-hero__logo-img--in { opacity: 1; }' +
 
         '.nfx-hero__chips {' +
         '  position: absolute; right: 1em; bottom: 1.1em; display: flex; align-items: center;' +
@@ -849,7 +858,7 @@
                 radius: 'Заокруглення кутів',
                 nav: 'Шапка в стилі Netflix',
                 nav_items: 'Вкладки в шапці',
-                nav_basic: 'Головна / Фільми / Серіали',
+                nav_basic: 'Головна / Серіали / Фільми',
                 nav_plus: '+ Каталог',
                 nav_full: '+ Аніме, Каталог, Обране',
                 bg: 'Розмитий фон',
@@ -878,7 +887,7 @@
                 radius: 'Скругление углов',
                 nav: 'Шапка в стиле Netflix',
                 nav_items: 'Вкладки в шапке',
-                nav_basic: 'Главная / Фильмы / Сериалы',
+                nav_basic: 'Главная / Сериалы / Фильмы',
                 nav_plus: '+ Каталог',
                 nav_full: '+ Аниме, Каталог, Избранное',
                 bg: 'Размытый фон',
@@ -907,7 +916,7 @@
                 radius: 'Corner radius',
                 nav: 'Netflix-style header',
                 nav_items: 'Header tabs',
-                nav_basic: 'Home / Movies / Series',
+                nav_basic: 'Home / Series / Movies',
                 nav_plus: '+ Catalog',
                 nav_full: '+ Anime, Catalog, Favorites',
                 bg: 'Blurred background',
@@ -935,7 +944,7 @@
             { name: 'nfx_nav', type: 'trigger', def: true, title: t('nav') },
             { name: 'nfx_nav_items', type: 'select', def: 'basic', title: t('nav_items'),
               values: { 'basic': t('nav_basic'), 'plus': t('nav_plus'), 'full': t('nav_full') } },
-            { name: 'nfx_bb_bg', type: 'select', def: 'poster', title: t('bg'),
+            { name: 'nfx_bb_bg', type: 'select', def: 'off', title: t('bg'),
               values: { 'off': t('bg_off'), 'poster': t('bg_poster'), 'backdrop': t('bg_backdrop') } },
             { name: 'nfx_bb_blur', type: 'select', def: '2.5em', title: t('blur'),
               values: { '1.2em': t('weak'), '2.5em': t('normal'), '4em': t('strong') } },
