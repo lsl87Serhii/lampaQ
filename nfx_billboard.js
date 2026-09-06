@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v3.0
+     *  NFX Billboard — v3.2
      *  Інтерфейс Lampa у стилі Netflix TV (стандартний інтерфейс).
      *
      *  Написано з нуля за розбором відео Netflix та опису механіки.
@@ -20,7 +20,7 @@
      * ================================================================ */
 
     var ID = 'nfx_billboard';
-    var VERSION = '3.0';
+    var VERSION = '3.2';
     var CSS_ID = 'nfx-billboard-css';
 
     var DEBOUNCE = 170;          // затримка важких ефектів (розділ 6)
@@ -366,30 +366,39 @@
             return parts.join('  ·  ');
         },
 
-        // ── кадр 16:9 усередині картки ────────────────────────────────
-        hero: function (cardEl, data) {
-            var view = cardEl.querySelector('.card__view');
-            if (!view) return null;
+        // ── вміст нерухомої рамки ─────────────────────────────────────
+        //  Кадри тайтлів перетікають по прозорості в одній і тій самій
+        //  рамці. Саме так це зроблено в Netflix: рамка не рухається і
+        //  не змінює розмір, змінюється тільки її вміст.
+        pane: function () {
+            var p = el('div', 'nfx-pane');
+            p.appendChild(el('img', 'nfx-pane__img'));
+            p.appendChild(el('div', 'nfx-pane__shade'));
+            p.appendChild(el('div', 'nfx-pane__logo'));
+            return p;
+        },
 
-            drop(view.querySelector('.nfx-hero'));
+        show: function (ctx, data) {
+            if (!ctx.frame) return;
 
-            var h = el('div', 'nfx-hero');
+            var panes = ctx.frame.querySelectorAll('.nfx-pane');
+            if (panes.length < 2) return;
 
-            var pic = el('img', 'nfx-hero__img');
+            var cur = ctx.pane || 0;
+            var next = (cur + 1) % 2;
+            var to = panes[next];
+
+            var pic = to.querySelector('.nfx-pane__img');
             pic.src = img(data.backdrop_path, 'w780') || img(data.poster_path, 'w500');
-            h.appendChild(pic);
 
-            h.appendChild(el('div', 'nfx-hero__shade'));
-
-            var logo = el('div', 'nfx-hero__logo');
-            h.appendChild(logo);
+            var logo = to.querySelector('.nfx-pane__logo');
+            logo.innerHTML = '';
             Logo.mount(logo, data);
 
-            // під рідний вміст картки, щоб бейджі інших плагінів лишались зверху
-            if (view.firstChild) view.insertBefore(h, view.firstChild);
-            else view.appendChild(h);
+            panes[cur].classList.remove('nfx-pane--on');
+            to.classList.add('nfx-pane--on');
 
-            return h;
+            ctx.pane = next;
         },
 
         // ── блок опису під рядом ──────────────────────────────────────
@@ -502,19 +511,34 @@
                 return -(index * m.step);
             };
 
-            ctx.setOffset = function (index, animated) {
+            /**
+             * @param mode 'anim'  — з пружиною
+             *             'hard'  — миттєво (перше відкриття)
+             *             'keep'  — лише поправити ціль, не чіпаючи поточний
+             *                       перехід. Саме це потрібно, коли Lampa
+             *                       смикає ряд посеред анімації: скидання
+             *                       transition у 'none' давало ривок.
+             */
+            ctx.setOffset = function (index, mode) {
                 if (S('nfx_pin', 'left') !== 'left') return;
 
                 var body = ctx.body();
                 var to = ctx.offset(index);
                 if (!body || to === null) return;
 
-                if (animated) ease(body, 'transition', anim());
-                else body.style.transition = 'none';
+                if (mode === 'anim') {
+                    ease(body, 'transition', anim());
+                    body.style.transitionProperty = 'transform';
+                } else if (mode === 'hard') {
+                    body.style.transition = 'none';
+                    body.style.transitionProperty = 'none';
+                }
 
-                body.style.transitionProperty = animated ? 'transform' : 'none';
-                body.style.transform = 'translate3d(' + to + 'px, 0px, 0px)';
-                body.style.webkitTransform = 'translate3d(' + to + 'px, 0px, 0px)';
+                var value = 'translate3d(' + to + 'px, 0px, 0px)';
+                if (body.style.transform === value) return;
+
+                body.style.transform = value;
+                body.style.webkitTransform = value;
             };
 
             /**
@@ -534,7 +558,8 @@
 
                 scroll.update = function (elem, center) {
                     try { orig.call(scroll, elem, center); } catch (e) { /* ignore */ }
-                    if (ctx.m) ctx.setOffset(ctx.index, false);
+                    // 'keep': поточний перехід не переривається
+                    if (ctx.m) ctx.setOffset(ctx.index, 'keep');
                 };
             };
 
@@ -553,9 +578,12 @@
 
                 if (!ctx.frame) {
                     var f = el('div', 'nfx-frame');
+                    f.appendChild(self.pane());
+                    f.appendChild(self.pane());
                     f.appendChild(el('div', 'nfx-frame__stroke'));
                     lineEl.querySelector('.items-line__body').appendChild(f);
                     ctx.frame = f;
+                    ctx.pane = 1;   // перший show() заповнить панель 0
                 }
 
                 ctx.frame.style.left = m.x + 'px';
@@ -570,32 +598,11 @@
                 else ctx.frame.classList.remove('nfx-frame--on');
             };
 
-            /** Згортання: кадр перекладається в нерухому рамку і згасає */
+            /** Згортання: картка знову стає звичайним постером */
             ctx.collapse = function () {
-                var old = ctx.active;
-                if (!old) return;
-
+                if (!ctx.active) return;
+                ctx.active.classList.remove('nfx-open');
                 ctx.active = null;
-
-                var hero = old.querySelector('.nfx-hero');
-                var live = ctx.frame && ctx.frame.classList.contains('nfx-frame--on');
-
-                if (hero && live) {
-                    var stale = ctx.frame.querySelectorAll('.nfx-hero--out');
-                    for (var i = 0; i < stale.length; i++) drop(stale[i]);
-
-                    hero.classList.add('nfx-hero--out');
-                    ctx.frame.insertBefore(hero, ctx.frame.firstChild);
-
-                    (function (h) {
-                        setTimeout(function () { drop(h); }, anim() + 60);
-                        requestAnimationFrame(function () { h.style.opacity = '0'; });
-                    })(hero);
-                } else {
-                    drop(hero);
-                }
-
-                old.classList.remove('nfx-open');
             };
 
             /** Важка частина — тільки після зупинки фокуса */
@@ -608,11 +615,11 @@
                 ctx.active = cardEl;
                 cardEl.classList.add('nfx-open');
 
-                self.hero(cardEl, data);
+                ctx.placeFrame();
+                self.show(ctx, data);
                 self.info(ctx.info, data);
                 Ambient.apply(data);
 
-                ctx.placeFrame();
                 ctx.showFrame(true);
             };
 
@@ -639,19 +646,33 @@
                 if (!ctx.ready) {
                     if (!ctx.measure()) return;
                     ctx.guard();
-                    ctx.setOffset(idx, false);
+                    ctx.setOffset(idx, 'hard');
                     ctx.expand(item);
                     ctx.ready = true;
                     setTimeout(function () { lineEl.classList.add('items-line--nfx-anim'); }, 60);
                     return;
                 }
 
-                ctx.collapse();
-                ctx.setOffset(idx, true);
-                ctx.showFrame(false);
+                var now = Date.now();
+                var idle = (now - (ctx.lastAt || 0)) > anim() * 0.9;
+                ctx.lastAt = now;
 
                 clearTimeout(ctx.tDebounce);
-                ctx.tDebounce = setTimeout(function () { ctx.expand(item); }, DEBOUNCE);
+
+                ctx.collapse();
+                ctx.setOffset(idx, 'anim');
+
+                if (idle) {
+                    // Одиночний крок: ширина і зсув стартують в одному кадрі
+                    // з однією пружиною — це і є «один анімаційний блок».
+                    // Раніше розгортання завжди чекало DEBOUNCE, тому
+                    // картка доростала після того, як ряд уже став.
+                    ctx.expand(item);
+                } else {
+                    // Утримання кнопки: важке відкладаємо (розділ 6)
+                    ctx.showFrame(false);
+                    ctx.tDebounce = setTimeout(function () { ctx.expand(item); }, DEBOUNCE);
+                }
             };
 
             ctx.module = {
@@ -680,10 +701,7 @@
 
             ctx.unguard();
 
-            if (ctx.active) {
-                ctx.active.classList.remove('nfx-open');
-                drop(ctx.active.querySelector('.nfx-hero'));
-            }
+            if (ctx.active) ctx.active.classList.remove('nfx-open');
 
             var body = ctx.body();
             if (body) {
@@ -716,7 +734,7 @@
             this.ctx.m = null;
             if (this.ctx.measure()) {
                 this.ctx.placeFrame();
-                this.ctx.setOffset(this.ctx.index, false);
+                this.ctx.setOffset(this.ctx.index, 'hard');
             }
         },
 
@@ -767,6 +785,21 @@
     var FullCard = {
         on: function () { return S('nfx_full', 'netflix') === 'netflix'; },
 
+        /**
+         * Кадр розтягуємо на весь екран.
+         * Контейнер .full-start-new починається під шапкою і не доходить
+         * до низу — звідси чорні смуги згори і знизу. Тому шар позиціонуємо
+         * не по контейнеру, а по вікну: зміщуємо на -rect.top / -rect.left
+         * і задаємо розмір вікна.
+         */
+        fit: function (layer, host) {
+            var r = host.getBoundingClientRect();
+            layer.style.top = (-r.top) + 'px';
+            layer.style.left = (-r.left) + 'px';
+            layer.style.width = (window.innerWidth || r.width) + 'px';
+            layer.style.height = (window.innerHeight || r.height) + 'px';
+        },
+
         process: function (e) {
             if (!this.on()) return;
 
@@ -776,17 +809,43 @@
 
             root.classList.add('nfx-full');
 
-            var has = root.querySelector('.full-start-new__background, .full-start__background');
-            if (has) return;
-
-            var url = img(data.backdrop_path, 'w1280') || img(data.poster_path, 'w780');
             var host = root.querySelector('.full-start-new, .full-start');
-            if (!url || !host) return;
+            var url = img(data.backdrop_path, 'w1280') || img(data.poster_path, 'w780');
+            if (!host || !url) return;
 
-            var layer = el('div', 'nfx-full__bg');
+            // рідний фон Lampa прибираємо — він живе в межах контейнера
+            var own = root.querySelector('.full-start-new__background, .full-start__background');
+            if (own) own.style.display = 'none';
+
+            var layer = host.querySelector('.nfx-full__bg');
+            if (!layer) {
+                layer = el('div', 'nfx-full__bg');
+                layer.appendChild(el('div', 'nfx-full__shade'));
+                if (host.firstChild) host.insertBefore(layer, host.firstChild);
+                else host.appendChild(layer);
+            }
+
             layer.style.backgroundImage = 'url(' + url + ')';
-            if (host.firstChild) host.insertBefore(layer, host.firstChild);
-            else host.appendChild(layer);
+
+            var self = this;
+            this.fit(layer, host);
+            requestAnimationFrame(function () { self.fit(layer, host); });
+
+            clearTimeout(this.tFit);
+            this.tFit = setTimeout(function () { self.fit(layer, host); }, 300);
+
+            if (!this.bound) {
+                this.bound = true;
+                var t = null;
+                window.addEventListener('resize', function () {
+                    clearTimeout(t);
+                    t = setTimeout(function () {
+                        var l = document.querySelector('.nfx-full .nfx-full__bg');
+                        var h = document.querySelector('.nfx-full .full-start-new, .nfx-full .full-start');
+                        if (l && h) self.fit(l, h);
+                    }, 200);
+                });
+            }
         },
 
         init: function () {
@@ -976,8 +1035,12 @@
 
         if (bg === 'ambient') {
             r.push('body .background { display: none !important; }');
+            // Шар лежить під усім вмістом застосунку. Без явного z-index
+            // на .wrap фіксований шар з z-index 0 перекривав рамку 16:9,
+            // і біла обводка зникала.
             r.push('.nfx-amb { position: fixed; left: 0; top: 0; right: 0; bottom: 0;' +
                 ' z-index: 0; pointer-events: none; overflow: hidden; }');
+            r.push('body .wrap, body .head { position: relative; z-index: 1; }');
             // маска обовʼязкова, інакше колір «б'є» в очі (розділ 4)
             r.push('.nfx-amb__layer { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
                 ' opacity: 0.45;' +
@@ -1037,33 +1100,34 @@
         r.push('.items-line--nfx-anim .card { transition: width ' + ms + 'ms ' + spring(ms) + '; }');
 
         r.push('.items-line--nfx .card.nfx-open { width: ' + wideEm + 'em !important; }');
-        r.push('.items-line--nfx .card.nfx-open .card__img { opacity: 0; }');
-
-        /* ── кадр 16:9 ── */
-        r.push('.nfx-hero { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
-            ' border-radius: ' + radius + '; overflow: hidden; }');
-        r.push('.nfx-hero__img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }');
-        r.push('.nfx-hero__shade { position: absolute; left: 0; right: 0; bottom: 0; height: 55%; z-index: 2;' +
-            ' background: -webkit-linear-gradient(top, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%);' +
-            ' background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%); }');
-        r.push('.nfx-hero__logo { position: absolute; left: 0.9em; bottom: 0.8em; z-index: 3;' +
-            ' max-width: ' + (poster * 0.8).toFixed(2) + 'em;' +
-            ' max-height: ' + (poster * 0.30).toFixed(2) + 'em;' +
-            ' display: flex; align-items: flex-end; pointer-events: none; }');
-        r.push('.nfx-hero__logo-img { max-width: 100%; max-height: 100%; width: auto; height: auto;' +
-            ' object-fit: contain; object-position: left bottom;' +
-            ' filter: drop-shadow(0 2px 10px rgba(0,0,0,0.8)); }');
-        r.push('.nfx-hero--out { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 1;' +
-            ' border-radius: ' + radius + ';' +
-            ' -webkit-transition: opacity ' + ms + 'ms ' + FALLBACK_EASE + ';' +
-            ' transition: opacity ' + ms + 'ms ' + FALLBACK_EASE + '; }');
+        // Слот під рамкою не малюється: показ веде сама рамка.
+        // Інакше картка, що росте і їде, «вискакувала» з-під рамки.
+        r.push('.items-line--nfx .card.nfx-open .card__view { visibility: hidden; }');
 
         /* ── нерухома рамка ── */
         r.push('.nfx-frame { position: absolute; z-index: 6; pointer-events: none; opacity: 0;' +
-            ' border-radius: ' + radius + ';' +
+            ' background: #000; overflow: hidden; border-radius: ' + radius + ';' +
             ' -webkit-transition: opacity 0.2s ease; transition: opacity 0.2s ease; }');
         r.push('.nfx-frame--on { opacity: 1; }');
-        r.push('.nfx-frame__stroke { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
+
+        // дві панелі, що перетікають по прозорості
+        r.push('.nfx-pane { position: absolute; left: 0; top: 0; right: 0; bottom: 0; opacity: 0;' +
+            ' -webkit-transition: opacity ' + ms + 'ms ease; transition: opacity ' + ms + 'ms ease; }');
+        r.push('.nfx-pane--on { opacity: 1; }');
+        r.push('.nfx-pane__img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }');
+        r.push('.nfx-pane__shade { position: absolute; left: 0; right: 0; bottom: 0; height: 55%;' +
+            ' background: -webkit-linear-gradient(top, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%);' +
+            ' background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.6) 100%); }');
+        r.push('.nfx-pane__logo { position: absolute; left: 0.9em; bottom: 0.8em;' +
+            ' max-width: ' + (poster * 0.8).toFixed(2) + 'em;' +
+            ' max-height: ' + (poster * 0.30).toFixed(2) + 'em;' +
+            ' display: flex; align-items: flex-end; }');
+        r.push('.nfx-hero__logo-img { max-width: 100%; max-height: 100%; width: auto; height: auto;' +
+            ' object-fit: contain; object-position: left bottom;' +
+            ' filter: drop-shadow(0 2px 10px rgba(0,0,0,0.8)); }');
+
+        // обводка поверх панелей, тому не блимає під час перетікання
+        r.push('.nfx-frame__stroke { position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 3;' +
             ' border-radius: ' + radius + '; border: 0.14em solid #fff; }');
 
         if (focus !== 'stroke') {
@@ -1087,32 +1151,30 @@
 
         /* ── сторінка тайтлу ── */
         if (S('nfx_full', 'netflix') === 'netflix') {
-            r.push('.nfx-full .full-start-new, .nfx-full .full-start { position: relative; overflow: hidden; }');
-            r.push('.nfx-full .full-start-new__background,' +
-                ' .nfx-full .full-start__background,' +
-                ' .nfx-full .nfx-full__bg {' +
-                ' position: absolute !important; left: 0 !important; top: 0 !important;' +
-                ' width: 100% !important; height: 100% !important; margin: 0 !important;' +
-                ' background-size: cover; background-position: center top;' +
-                ' -webkit-mask-image: none !important; mask-image: none !important; }');
-            r.push('.nfx-full .full-start-new__background img, .nfx-full .full-start__background img {' +
-                ' width: 100% !important; height: 100% !important; object-fit: cover !important; filter: none !important; }');
+            // overflow visible — інакше кадр, виведений за межі контейнера,
+            // буде зрізаний і чорні смуги лишаться
+            r.push('.nfx-full .full-start-new, .nfx-full .full-start { position: relative; overflow: visible; }');
+            r.push('.nfx-full .full-start-new__background, .nfx-full .full-start__background { display: none !important; }');
 
-            // Затемнення ТІЛЬКИ знизу під текст. Верхньої плашки немає —
-            // саме вона перекривала кадр на сторінці тайтлу.
-            r.push('.nfx-full .full-start-new::after, .nfx-full .full-start::after {' +
-                ' content: ""; display: block; position: absolute; left: 0; right: 0; bottom: 0; top: 45%;' +
-                ' pointer-events: none; z-index: 1;' +
-                ' background: -webkit-linear-gradient(top, rgba(0,0,0,0) 0%, rgba(0,0,0,0.8) 100%);' +
-                ' background: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,0.8) 100%); }');
-            r.push('.nfx-full .full-start-new::before, .nfx-full .full-start::before { display: none !important; }');
+            r.push('.nfx-full__bg { position: absolute; z-index: 0; pointer-events: none;' +
+                ' background-size: cover; background-position: center center;' +
+                ' -webkit-mask-image: none !important; mask-image: none !important; }');
+
+            // затемнення живе всередині кадру, тому має рівно ту саму
+            // геометрію — жодних смуг і жорстких меж
+            r.push('.nfx-full__shade { position: absolute; left: 0; top: 0; right: 0; bottom: 0;' +
+                ' background: -webkit-linear-gradient(top, rgba(0,0,0,0) 40%, rgba(0,0,0,0.85) 100%);' +
+                ' background: linear-gradient(to bottom, rgba(0,0,0,0) 40%, rgba(0,0,0,0.85) 100%); }');
+
+            r.push('.nfx-full .full-start-new::before, .nfx-full .full-start::before,' +
+                ' .nfx-full .full-start-new::after, .nfx-full .full-start::after { display: none !important; }');
             r.push('.nfx-full .applecation__overlay, .nfx-full .application__overlay { display: none !important; }');
 
             r.push('.nfx-full .full-start-new__left, .nfx-full .full-start__left { display: none !important; }');
             r.push('.nfx-full .full-start-new__reactions, .nfx-full .full-start__reactions { display: none !important; }');
             r.push('.nfx-full .full-start-new__body, .nfx-full .full-start__body {' +
                 ' position: relative; z-index: 2; display: flex; align-items: flex-end;' +
-                ' min-height: 78vh; padding-left: 4%; padding-top: 6em; padding-bottom: 2em; }');
+                ' min-height: 82vh; padding-left: 4%; padding-top: 6em; padding-bottom: 2em; }');
             r.push('.nfx-full .full-start-new__right, .nfx-full .full-start__right {' +
                 ' position: relative; z-index: 3; max-width: 46em;' +
                 ' display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-end; }');
