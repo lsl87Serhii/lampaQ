@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v3.3
+     *  NFX Billboard — v3.4
      *  Інтерфейс Lampa у стилі Netflix TV (стандартний інтерфейс).
      *
      *  Написано з нуля за розбором відео Netflix та опису механіки.
@@ -20,7 +20,7 @@
      * ================================================================ */
 
     var ID = 'nfx_billboard';
-    var VERSION = '3.3';
+    var VERSION = '3.4';
     var CSS_ID = 'nfx-billboard-css';
 
     var DEBOUNCE = 170;          // затримка важких ефектів (розділ 6)
@@ -497,6 +497,14 @@
                 return lineEl.querySelectorAll('.items-line__body .card');
             };
 
+            /** Поточний зсув ряду в пікселях */
+            ctx.translate = function () {
+                var b = ctx.body();
+                if (!b) return 0;
+                var m = /translate3d\((-?[\d.]+)px/.exec(b.style.transform || '');
+                return m ? parseFloat(m[1]) : 0;
+            };
+
             /**
              * Єдиний замір, з якого виводиться вся геометрія.
              * Робиться в спокої, поки жодна картка не розгорнута, тому
@@ -529,16 +537,21 @@
                 var box = lineEl.querySelector('.items-line__body');
                 var a = cards[0].getBoundingClientRect();
                 var b = box.getBoundingClientRect();
-                if (!a.width) return null;
+                if (!a.width || !b.width) return null;
 
-                ctx.m = {
-                    step: step,
-                    w: w,
-                    wide: Math.round(w * POSTER_TO_WIDE),
-                    h: Math.round(w * POSTER_RATIO),
-                    x: a.left - b.left,     // X_start — стала для всіх індексів
-                    y: a.top - b.top
-                };
+                // X_start рахуємо без урахування поточного зсуву ряду.
+                // Якщо міряти «як є», а ряд уже прокручений (так буває
+                // одразу після перепідключення), рамка їде за екран —
+                // саме через це слот 16:9 лишався порожнім.
+                var x = a.left - b.left - ctx.translate();
+                var y = a.top - b.top;
+                var wide = Math.round(w * POSTER_TO_WIDE);
+
+                // заміри під час недоладнаної верстки відкидаємо
+                if (w < 20 || step < w || x < -2 || x > b.width * 0.5) return null;
+                if (wide > b.width) return null;
+
+                ctx.m = { step: step, w: w, wide: wide, h: Math.round(w * POSTER_RATIO), x: x, y: y };
 
                 return ctx.m;
             };
@@ -645,6 +658,32 @@
             };
 
             /** Важка частина — тільки після зупинки фокуса */
+            /** Якщо рамки немає або вона з битою геометрією — переміряти */
+            ctx.heal = function () {
+                var bad = !ctx.frame || parseFloat(ctx.frame.style.width || 0) < 20;
+                if (!bad) return;
+
+                ctx.m = null;
+                ctx.placeFrame();
+
+                if (ctx.frame && parseFloat(ctx.frame.style.width || 0) >= 20) return;
+
+                // верстка ще не доїхала — повторюємо, поки не вийде
+                clearTimeout(ctx.tHeal);
+                ctx.healTries = (ctx.healTries || 0) + 1;
+                if (ctx.healTries > 20) return;
+
+                ctx.tHeal = setTimeout(function () {
+                    ctx.m = null;
+                    ctx.placeFrame();
+                    if (ctx.frame) {
+                        ctx.showFrame(true);
+                        if (ctx.active && ctx.activeData) self.show(ctx, ctx.activeData, ctx.active);
+                    }
+                    ctx.heal();
+                }, 150);
+            };
+
             ctx.expand = function (item) {
                 var cardEl = item.render(true);
                 if (!cardEl || ctx.active === cardEl) return;
@@ -652,9 +691,11 @@
                 var data = item.data || cardEl.card_data || {};
 
                 ctx.active = cardEl;
+                ctx.activeData = data;
                 cardEl.classList.add('nfx-open');
 
                 ctx.placeFrame();
+                ctx.heal();
                 self.show(ctx, data, cardEl);
                 self.info(ctx.info, data);
                 Ambient.apply(data);
@@ -747,6 +788,7 @@
             clearInterval(ctx.tPoll);
             clearTimeout(ctx.tDebounce);
             clearTimeout(ctx.tSettle);
+            clearTimeout(ctx.tHeal);
 
             ctx.unguard();
 
@@ -1060,6 +1102,7 @@
         var titles = isOn('nfx_titles', false) ? 'block' : 'none';
         var bg = S('nfx_bg', 'ambient');
         var focus = S('nfx_focus', 'shadow');
+        var gap = S('nfx_gap', '-1.6em');
         var ms = anim();
         var r = [];
 
@@ -1120,7 +1163,8 @@
         r.push('body.nfx-nav-on.menu--always.menu--open .wrap__content { transform: translate3d(15em,0,0) !important; }');
 
         /* ── ряд ── */
-        r.push('.items-line--nfx { padding-bottom: 1.4em !important; }');
+        r.push('.items-line--nfx { padding-bottom: 1.4em !important; margin-top: ' + gap + ' !important; }');
+        r.push('.items-line--nfx .items-line__head { margin-bottom: 0.6em !important; }');
         r.push('.items-line--nfx .items-line__body { position: relative; }');
         r.push('.items-line--nfx .card__title, .items-line--nfx .card__age { display: ' + titles + ' !important; }');
 
@@ -1252,7 +1296,7 @@
     var KEYS = [
         'nfx_nav', 'nfx_nav_items', 'nfx_bg', 'nfx_full', 'nfx_radius', 'nfx_titles',
         'nfx_row', 'nfx_scope', 'nfx_pin', 'nfx_wide', 'nfx_info', 'nfx_speed',
-        'nfx_focus', 'nfx_logo_lang'
+        'nfx_focus', 'nfx_logo_lang', 'nfx_gap'
     ];
 
     var applyTimer = null;
@@ -1283,6 +1327,8 @@
             speed: 'Швидкість анімації', sp_f: 'Швидко (260 мс)', sp_n: 'Як у Netflix (380 мс)', sp_s: 'Повільно (500 мс)',
             focus: 'Виділення обраної картки', fo_s: 'Тільки обводка', fo_sh: 'Обводка і тінь', fo_d: 'Обводка, тінь, затемнення решти',
             radius: 'Заокруглення кутів', titles: 'Назви під картками',
+            gap: 'Відступ ряду від шапки', gap_0: 'Стандартний', gap_1: 'Менший',
+            gap_2: 'Малий', gap_3: 'Мінімальний',
             row: 'Увімкнути ряд-білборд', scope: 'Де застосовувати',
             sc_m: 'Тільки головна', sc_a: 'Усі сторінки з рядами',
             pin: 'Позиція фокуса в ряду', pin_l: 'Ліворуч (Netflix)', pin_c: 'По центру (як у Lampa)',
@@ -1298,6 +1344,8 @@
             speed: 'Animation speed', sp_f: 'Fast (260 ms)', sp_n: 'Netflix (380 ms)', sp_s: 'Slow (500 ms)',
             focus: 'Selected card emphasis', fo_s: 'Stroke only', fo_sh: 'Stroke and shadow', fo_d: 'Stroke, shadow, dim the rest',
             radius: 'Corner radius', titles: 'Titles under cards',
+            gap: 'Row offset from header', gap_0: 'Default', gap_1: 'Smaller',
+            gap_2: 'Small', gap_3: 'Minimal',
             row: 'Enable billboard row', scope: 'Where to apply',
             sc_m: 'Main page only', sc_a: 'All pages with rows',
             pin: 'Focus position in row', pin_l: 'Left (Netflix)', pin_c: 'Center (Lampa default)',
@@ -1333,6 +1381,8 @@
             { n: 'nfx_radius', ty: 'select', d: '0.4em', t: t('radius'),
               v: { '0em': '0', '0.4em': '0.4em', '0.8em': '0.8em', '1em': '1em' } },
             { n: 'nfx_titles', ty: 'trigger', d: false, t: t('titles') },
+            { n: 'nfx_gap', ty: 'select', d: '-1.6em', t: t('gap'),
+              v: { '0em': t('gap_0'), '-1.6em': t('gap_1'), '-3em': t('gap_2'), '-4.5em': t('gap_3') } },
             { n: 'nfx_row', ty: 'trigger', d: true, t: t('row') },
             { n: 'nfx_scope', ty: 'select', d: 'main', t: t('scope'),
               v: { main: t('sc_m'), all: t('sc_a') } },
