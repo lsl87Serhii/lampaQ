@@ -5,6 +5,8 @@
     window.nfx_skip_plugin = true;
 
     var DB_URL = 'https://raw.githubusercontent.com/ipavlin98/lmp-series-skip-db/refs/heads/main/database/';
+    var SKIPDB_API = 'https://api.skipdb.tv/api/segments';
+    var INTRODB_API = 'https://api.theintrodb.org/v3/media';
     var ANISKIP_API = 'https://api.aniskip.com/v2/skip-times';
     var ANILIST_API = 'https://graphql.anilist.co';
     var JIKAN_API = 'https://api.jikan.moe/v4/anime';
@@ -89,6 +91,18 @@
             'Титри у фільмах',
             'Для фільмів бази міток немає — позиція титрів рахується від тривалості');
 
+        param('nfx_skip_skipdb',
+            { true: 'Увімкнено', false: 'Вимкнено' },
+            'true',
+            'SkipDB',
+            'Відкрита база по IMDb ID: заставка, рекап, титри, прев\'ю. Фільми і серіали');
+
+        param('nfx_skip_introdb',
+            { true: 'Увімкнено', false: 'Вимкнено' },
+            'true',
+            'TheIntroDB',
+            'Публічна база міток по TMDB ID — працює без kinopoisk_id, у т.ч. для фільмів');
+
         param('nfx_skip_anime',
             { true: 'Увімкнено', false: 'Вимкнено' },
             'true',
@@ -157,6 +171,139 @@
         if (!card) return null;
         return card.kinopoisk_id || card.kp_id ||
             (card.source === 'kinopoisk' || card.source === 'kp' ? card.id : null) || null;
+    }
+
+    function tmdbId(card) {
+        if (!card) return null;
+        if (card.tmdb_id) return card.tmdb_id;
+        if (card.source === 'kinopoisk' || card.source === 'kp') return null;
+        var id = parseInt(card.id);
+        return isNaN(id) ? null : id;
+    }
+
+    function imdbId(card) {
+        if (!card) return null;
+        var id = card.imdb_id || card.imdbId || '';
+        return /^tt\d+$/.test(id) ? id : null;
+    }
+
+    /**
+     * SkipDB працює ТІЛЬКИ по IMDb ID. У картці Lampa його часто немає,
+     * тому дотягуємо через TMDB external_ids — ключ і проксі беремо в самої Lampa.
+     */
+    var imdb_cache = {};
+
+    function resolveImdb(card, serial) {
+        var direct = imdbId(card);
+        if (direct) return Promise.resolve(direct);
+
+        var tmdb = tmdbId(card);
+        if (!tmdb || !Lampa.TMDB || !Lampa.TMDB.api) return Promise.resolve(null);
+
+        var key = (serial ? 'tv' : 'movie') + '/' + tmdb;
+        if (imdb_cache[key] !== undefined) return Promise.resolve(imdb_cache[key]);
+
+        var url = Lampa.TMDB.api(key + '/external_ids?api_key=' + Lampa.TMDB.key());
+
+        return fetchJson(url).then(function (data) {
+            var id = data && data.imdb_id;
+            id = /^tt\d+$/.test(id || '') ? id : null;
+            imdb_cache[key] = id;
+            log('imdb resolved', tmdb, '->', id);
+            return id;
+        })['catch'](function () { return null; });
+    }
+
+    /**
+     * SkipDB — відкрита база (ODbL), intro / recap / outro / preview, фільми і серіали.
+     * Головна перевага: приймає duration потоку і зсуває мітки для релізів,
+     * що відрізняються на 15 сек (зайве лого на початку) — це саме про торренти.
+     * Читання відкрите, 120 запитів/хв.
+     */
+    function skipdb(imdb, season, episode, duration) {
+        if (!imdb) return Promise.resolve([]);
+
+        var q = ['imdb_id=' + encodeURIComponent(imdb)];
+        if (season && episode) {
+            q.push('season=' + season);
+            q.push('episode=' + episode);
+        }
+        if (duration > 0) q.push('duration=' + Math.round(duration));
+
+        return fetchJson(SKIPDB_API + '?' + q.join('&')).then(function (data) {
+            var seg = data && data.segments;
+            if (!seg) return [];
+
+            var out = [];
+
+            function add(item, name) {
+                if (!item) return;
+                // out-of-range означає, що найближчі дані надто відрізняються — не беремо
+                if (item.match === 'out-of-range') return;
+                var start = (item.start_ms || 0) / 1000;
+                var end = item.end_ms === null || item.end_ms === undefined
+                    ? (duration > 0 ? duration : start + 600)
+                    : item.end_ms / 1000;
+                if (end > start) out.push({ start: start, end: end, name: name });
+            }
+
+            add(seg.recap, 'Пропустити рекап');
+            add(seg.intro, 'Пропустити заставку');
+            add(seg.outro, 'Пропустити титри');
+
+            log('skipdb', imdb, out.length + ' сегментів');
+            return out;
+        });
+    }
+
+    /**
+     * TheIntroDB — публічна краудсорсна база, ключована TMDB ID (imdb як запасний).
+     * Ключ API потрібен лише для відправки міток, читання відкрите.
+     * Час віддається в мілісекундах; start_ms: null = з початку, end_ms: null = до кінця.
+     */
+    function introdb(card, season, episode, duration) {
+        var tmdb = tmdbId(card);
+        var imdb = imdbId(card);
+        if (!tmdb && !imdb) return Promise.resolve([]);
+
+        var q = [];
+        if (tmdb) q.push('tmdb_id=' + tmdb);
+        else q.push('imdb_id=' + encodeURIComponent(imdb));
+        if (season && episode) {
+            q.push('season=' + season);
+            q.push('episode=' + episode);
+        }
+        if (duration > 0) q.push('duration_ms=' + Math.round(duration * 1000));
+
+        return fetchJson(INTRODB_API + '?' + q.join('&')).then(function (data) {
+            if (!data) return [];
+            var out = [];
+
+            function add(list, name, needStart) {
+                if (!Array.isArray(list)) return;
+                list.forEach(function (seg) {
+                    var raw_start = seg.start_ms;
+                    var raw_end = seg.end_ms;
+
+                    // титри без початку — сміття, пропускаємо
+                    if (needStart && (raw_start === null || raw_start === undefined)) return;
+
+                    var start = (raw_start === null || raw_start === undefined) ? 0 : raw_start / 1000;
+                    var end = (raw_end === null || raw_end === undefined)
+                        ? (duration > 0 ? duration : start + 600)
+                        : raw_end / 1000;
+
+                    if (end > start) out.push({ start: start, end: end, name: name });
+                });
+            }
+
+            add(data.intro, 'Пропустити заставку', false);
+            add(data.recap, 'Пропустити рекап', false);
+            add(data.credits, 'Пропустити титри', true);
+
+            log('introdb', tmdb || imdb, out.length + ' сегментів');
+            return out;
+        });
     }
 
     function fetchJson(url, opts) {
@@ -348,10 +495,27 @@
             });
         }
 
+        var s_season = serial ? pos.season : 0;
+        var s_episode = serial ? pos.episode : 0;
+
         return chain.then(function (got) {
             base.db = got.db;
-            if (got.list.length || !serial || !flag('nfx_skip_anime', 'true')) return got.list;
-            if (!isAnime(card)) return got.list;
+            if (got.list.length) return got.list;
+
+            // SkipDB — по IMDb ID, фільми і серіали, з корекцією під реліз
+            if (!flag('nfx_skip_skipdb', 'true')) return [];
+            return resolveImdb(card, serial).then(function (imdb) {
+                return skipdb(imdb, s_season, s_episode, 0);
+            });
+        }).then(function (list) {
+            if (list.length) return list;
+
+            // TheIntroDB — по TMDB ID, kinopoisk_id не потрібен
+            if (!flag('nfx_skip_introdb', 'true')) return [];
+            return introdb(card, s_season, s_episode, duration);
+        }).then(function (list) {
+            if (list.length || !serial || !flag('nfx_skip_anime', 'true')) return list;
+            if (!isAnime(card)) return list;
 
             var title = card.original_name || card.original_title || card.name || card.title || '';
             var year = (card.first_air_date || card.release_date || '').slice(0, 4);
@@ -375,7 +539,8 @@
                 }
             }
 
-            log('marks', { intro: base.intro, credits: base.credits, duration: base.duration, serial: base.serial, derived: base.derived }, 'id', id);
+            log('marks', { intro: base.intro, credits: base.credits, duration: base.duration, serial: base.serial, derived: base.derived },
+                'kp', id, 'tmdb', tmdbId(card), 'imdb', imdbId(card));
             return base;
         })['catch'](function (e) {
             log('collect error', e);
@@ -738,7 +903,7 @@
             noty(label(res) + ' — мітки передано в ' + where +
                 (filled ? ', серій у плейлисті: ' + filled : ''));
         } else {
-            noty(label(res) + ' — міток немає' + (res.serial && !kpId(getCard(data)) ? ' (немає kinopoisk_id)' : ''));
+            noty(label(res) + ' — міток немає в жодній базі');
         }
 
         log('launch segments', data.segments, 'playlist filled', filled,
