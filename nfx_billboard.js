@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v3.4
+     *  NFX Billboard — v3.5
      *  Інтерфейс Lampa у стилі Netflix TV (стандартний інтерфейс).
      *
      *  Написано з нуля за розбором відео Netflix та опису механіки.
@@ -20,7 +20,7 @@
      * ================================================================ */
 
     var ID = 'nfx_billboard';
-    var VERSION = '3.4';
+    var VERSION = '3.5';
     var CSS_ID = 'nfx-billboard-css';
 
     var DEBOUNCE = 170;          // затримка важких ефектів (розділ 6)
@@ -916,8 +916,21 @@
             var url = img(data.backdrop_path, 'w1280') || img(data.poster_path, 'w780');
             if (!url) return;
 
-            this.ensure().style.backgroundImage = 'url(' + url + ')';
-            document.body.classList.add('nfx-full-on');
+            // памʼятаємо кадр на самій сторінці: при поверненні з торентів
+            // Lampa піднімає збережену активність і подію 'full complite'
+            // більше не шле, тому відновлювати доводиться самим
+            root.__nfx_bg = url;
+            this.restore(root);
+        },
+
+        /** Показати кадр тієї сторінки, яка щойно стала активною */
+        restore: function (root) {
+            if (this.on() && root && root.__nfx_bg) {
+                this.ensure().style.backgroundImage = 'url(' + root.__nfx_bg + ')';
+                document.body.classList.add('nfx-full-on');
+            } else {
+                this.hide();
+            }
         },
 
         init: function () {
@@ -928,9 +941,12 @@
                 try { self.process(e); } catch (err) { console.log('[NFX] full', err); }
             });
 
-            // залишаємо сторінку тайтлу — кадр гасне
+            // 'start' приходить і на перехід уперед, і на повернення назад
             Lampa.Listener.follow('activity', function (e) {
-                if (e.type === 'start' && e.component !== 'full') self.hide();
+                if (e.type !== 'start') return;
+                try {
+                    self.restore(node(e.object && e.object.activity && e.object.activity.render()));
+                } catch (err) { console.log('[NFX] activity', err); }
             });
         }
     };
