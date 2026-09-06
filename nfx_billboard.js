@@ -2,7 +2,7 @@
     'use strict';
 
     /* ================================================================
-     *  NFX Billboard — v1.9
+     *  NFX Billboard — v2.0
      *  Netflix-подібний інтерфейс для Lampa (стандартний інтерфейс)
      *
      *    A. Шапка: пошук + вкладки + налаштування, по центру екрана
@@ -16,7 +16,7 @@
      * ================================================================ */
 
     var PLUGIN_ID = 'nfx_billboard';
-    var VERSION = '1.9';
+    var VERSION = '2.0';
     var CSS_ID = 'nfx-billboard-css';
     /**
      * Тривалість і крива переходу.
@@ -24,7 +24,43 @@
      * весь рух триває 380 мс, за першу чверть часу проходить 39% шляху —
      * це швидкий старт із гальмуванням, а не симетрична крива.
      */
-    var EASE = 'cubic-bezier(0, 0, 0.58, 1)';   // ease-out — підібрано по кадрах відео
+    var EASE = 'cubic-bezier(0.16, 0.84, 0.28, 1)';  // запасна крива для старого WebKit
+
+    var DEBOUNCE = 170;         // затримка важких ефектів під час швидкого гортання
+    var SPRING_RESPONSE = 0.35; // .spring(response:) з опису Netflix
+    var SPRING_DAMPING = 0.85;  // dampingFraction — майже без перельоту
+
+    /**
+     * CSS-крива з рівняння згасаючої пружини.
+     * Netflix не використовує ease-in-out: рух має бути пружним, але без
+     * тремтіння. У CSS це відтворюється функцією linear() з семплами
+     * пружини. Якщо рушій її не знає (старий WebKit), лишається запасна
+     * cubic-bezier — присвоєння невалідного значення просто ігнорується.
+     */
+    function springCurve(ms) {
+        var z = SPRING_DAMPING;
+        var w0 = 2 * Math.PI / SPRING_RESPONSE;
+        var wd = w0 * Math.sqrt(1 - z * z);
+        var dur = ms / 1000;
+        var steps = 30;
+        var out = [];
+
+        for (var i = 0; i <= steps; i++) {
+            var t = dur * i / steps;
+            var v = 1 - Math.exp(-z * w0 * t) * (Math.cos(wd * t) + (z * w0 / wd) * Math.sin(wd * t));
+            out.push(Math.round(v * 10000) / 10000);
+        }
+
+        out[out.length - 1] = 1;
+        return 'linear(' + out.join(',') + ')';
+    }
+
+    /** Ставимо запасну криву, потім пружину — невалідна просто не застосується */
+    function setEasing(node, prop, ms) {
+        node.style[prop] = ms + 'ms ' + EASE;
+        node.style[prop] = ms + 'ms ' + springCurve(ms);
+    }
+
 
     function anim() {
         var v = parseInt(S('nfx_speed', '380'), 10);
@@ -466,50 +502,65 @@
                 return -(index * step);
             };
 
-            ctx.open = function (item) {
-                if (!item) return;
+            /** Індекс картки в ряду */
+            ctx.indexOf = function (item) {
+                if (!line.items) return -1;
+                for (var k = 0; k < line.items.length; k++) {
+                    if (line.items[k] === item) return k;
+                }
+                return -1;
+            };
 
+            /** Зсув контейнера: Offset = -(I_active × (W_normal + S)) */
+            ctx.shift = function (index) {
+                if (S('nfx_pin', 'left') !== 'left') return;
+
+                var body = ctx.body();
+                var to = ctx.target(index);
+                if (!body || to === null) return;
+
+                setEasing(body, 'transition', anim());
+                body.style.transitionProperty = 'transform';
+                body.style.transform = 'translate3d(' + to + 'px, 0px, 0px)';
+                body.style.webkitTransform = 'translate3d(' + to + 'px, 0px, 0px)';
+            };
+
+            /** Згорнути активну картку; її кадр згасає в нерухомій рамці */
+            ctx.collapse = function () {
+                var el0 = ctx.current;
+                if (!el0) return;
+
+                ctx.current = null;
+
+                var oldHero = el0.querySelector('.nfx-hero');
+                var frameReady = ctx.frame && ctx.frame.classList.contains('nfx-frame--on');
+
+                if (oldHero && frameReady) {
+                    var stale = ctx.frame.querySelectorAll('.nfx-hero--out');
+                    for (var q = 0; q < stale.length; q++) remove(stale[q]);
+
+                    oldHero.classList.add('nfx-hero--out');
+                    ctx.frame.insertBefore(oldHero, ctx.frame.firstChild);
+                    setTimeout(function () { remove(oldHero); }, anim() + 60);
+                    requestAnimationFrame(function () { oldHero.style.opacity = '0'; });
+                } else {
+                    remove(oldHero);
+                }
+
+                el0.classList.remove('nfx-open');
+            };
+
+            /**
+             * Розгортання картки — важка частина: нова геометрія, кадр
+             * з TMDB, логотип, опис. За описом Netflix вона запускається
+             * лише коли фокус зупинився (debounce 150–200 мс), інакше при
+             * утриманні кнопки інтерфейс починає смикатись.
+             */
+            ctx.expand = function (item) {
                 var nextEl = item.render(true);
                 if (!nextEl || ctx.current === nextEl) return;
 
-                var prevEl = ctx.current;
                 var data = item.data || nextEl.card_data || {};
-                var animate = !!prevEl && ctx.ready;
-
-                // крок ряду міряємо до першого розгортання, поки всі
-                // картки однакові
-                if (!ctx.stepPx) ctx.step();
-
-                var index = -1;
-                if (line.items) {
-                    for (var k = 0; k < line.items.length; k++) {
-                        if (line.items[k] === item) { index = k; break; }
-                    }
-                }
-
-                // 1. кадр попереднього тайтлу перекладаємо в нерухому рамку
-                //    і гасимо — саме так виглядає перехід у Netflix
-                if (prevEl) {
-                    var oldHero = prevEl.querySelector('.nfx-hero');
-                    var frameReady = ctx.frame && ctx.frame.classList.contains('nfx-frame--on');
-                    if (oldHero && frameReady && animate) {
-                        // при швидкому перемиканні старі шари могли накопичуватись
-                        var stale = ctx.frame.querySelectorAll('.nfx-hero--out');
-                        for (var q = 0; q < stale.length; q++) remove(stale[q]);
-
-                        oldHero.classList.add('nfx-hero--out');
-                        ctx.frame.insertBefore(oldHero, ctx.frame.firstChild);
-                        setTimeout(function () { remove(oldHero); }, anim() + 60);
-                        requestAnimationFrame(function () { oldHero.style.opacity = '0'; });
-                    } else {
-                        remove(oldHero);
-                    }
-                    prevEl.classList.remove('nfx-open');
-                }
-
-                // 2. позиція — від індексу, тому не залежить від того,
-                //    чи доїхала попередня анімація
-                var to = animate ? ctx.target(index) : null;
 
                 ctx.current = nextEl;
                 nextEl.classList.add('nfx-open');
@@ -517,34 +568,54 @@
                 self.buildHero(nextEl, data);
                 self.renderInfo(ctx.info, data);
 
-                // 3. ширина карток і зсув ряду їдуть одночасно, однією
-                //    тривалістю — інакше картка спершу росте, потім ряд їде
-                var body = ctx.body();
+                if (ctx.frame) ctx.frame.classList.add('nfx-frame--on');
 
-                if (animate && body && to !== null && S('nfx_pin', 'left') === 'left') {
-                    body.style.transition = 'transform ' + anim() + 'ms ' + EASE;
-                    body.style.webkitTransition = '-webkit-transform ' + anim() + 'ms ' + EASE;
-                    body.style.transform = 'translate3d(' + to + 'px, 0px, 0px)';
-                    body.style.webkitTransform = 'translate3d(' + to + 'px, 0px, 0px)';
-                } else if (S('nfx_pin', 'left') === 'left' && line.scroll) {
-                    line.scroll.update(nextEl, false);
-                }
-
-                // 4. Рамку міряємо тільки після того, як усе стало на місце:
-                //    під час анімації getBoundingClientRect віддає проміжні
-                //    значення, і рамка ставала не туди. Робимо це після
-                //    кожного переходу — так вона сама себе виправляє.
                 clearTimeout(ctx.settle);
                 ctx.settle = setTimeout(function () {
                     if (!ctx.stepPx) ctx.step();
                     self.ensureFrame(ctx);
                     self.placeFrame(ctx);
-
-                    if (!ctx.ready) {
-                        ctx.lineEl.classList.add('items-line--nfx-anim');
-                        ctx.ready = true;
-                    }
+                    ctx.lineEl.classList.add('items-line--nfx-anim');
+                    ctx.ready = true;
                 }, anim() + 80);
+            };
+
+            /**
+             * Реакція на переміщення фокуса.
+             * Легке (зсув ряду, згортання) — миттєво, щоб пульт відгукувався
+             * без затримки. Важке — через DEBOUNCE.
+             */
+            ctx.open = function (item) {
+                if (!item) return;
+
+                var nextEl = item.render(true);
+                if (!nextEl) return;
+
+                if (!ctx.stepPx) ctx.step();
+
+                var index = ctx.indexOf(item);
+                var first = !ctx.ready;
+
+                // перше відкриття — одразу і без анімації
+                if (first) {
+                    ctx.expand(item);
+                    return;
+                }
+
+                if (ctx.current === nextEl && ctx.pending === item) return;
+                ctx.pending = item;
+
+                // миттєво: згортання + зсув в одному кадрі
+                ctx.collapse();
+                ctx.shift(index);
+
+                // рамка порожня, поки фокус не зупинився
+                if (ctx.frame) ctx.frame.classList.remove('nfx-frame--on');
+
+                clearTimeout(ctx.debounce);
+                ctx.debounce = setTimeout(function () {
+                    ctx.expand(item);
+                }, DEBOUNCE);
             };
 
             ctx.module = {
@@ -571,6 +642,7 @@
             if (!ctx) return;
 
             clearInterval(ctx.timer);
+            clearTimeout(ctx.debounce);
             clearTimeout(ctx.settle);
 
             if (ctx.current) {
@@ -920,9 +992,10 @@
         css.push('.items-line--nfx .card__img { border-radius: ' + radius + '; }');
 
         // анімація вмикається лише після першого відкриття
+        // дві декларації: якщо рушій не знає linear(), лишиться перша
         css.push('.items-line--nfx-anim .card {' +
-            ' -webkit-transition: width ' + anim() + 'ms ' + EASE + ';' +
-            ' transition: width ' + anim() + 'ms ' + EASE + '; }');
+            ' transition: width ' + anim() + 'ms ' + EASE + ';' +
+            ' transition: width ' + anim() + 'ms ' + springCurve(anim()) + '; }');
 
         // Lampa підстрибує карткою у фокусі (animation-card-focus) — гасимо
         css.push('.items-line--nfx .card.focus .card__view,' +
