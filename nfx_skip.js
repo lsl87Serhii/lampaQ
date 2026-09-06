@@ -73,6 +73,12 @@
             'Титри / наступна серія',
             'Що робити на фінальних титрах');
 
+        param('nfx_skip_offset',
+            { 0: 'Без запасу', 1: '1 секунда', 2: '2 секунди', 3: '3 секунди', 5: '5 секунд' },
+            '2',
+            'Запас при пропуску',
+            'Перемотує на стільки раніше кінця заставки, щоб не зрізати початок серії');
+
         param('nfx_skip_wait',
             { 3: '3 секунди', 4: '4 секунди', 5: '5 секунд', 8: '8 секунд' },
             '4',
@@ -431,6 +437,14 @@
         return 0;
     }
 
+    // Фактична тривалість файлу, якщо Lampa вже зберегла її після попереднього перегляду.
+    // Це справжня довжина конкретного релізу, на відміну від runtime з картки TMDB.
+    function knownDuration(data) {
+        var d = (data.timeline && data.timeline.duration) || data.duration || 0;
+        d = parseFloat(d);
+        return !isNaN(d) && d > 60 ? d : 0;
+    }
+
     // Куди піде відео: у вбудований веб-плеєр Lampa чи в зовнішній (tvOS Pro, Infuse, VLC...)
     function isExternal(data) {
         try {
@@ -470,7 +484,8 @@
         var card = getCard(data);
         var pos = getPosition(data);
         var serial = isSerial(card, data);
-        var duration = runtimeSec(card, serial);
+        var exact = knownDuration(data);
+        var duration = exact || runtimeSec(card, serial);
 
         var base = {
             intro: null, credits: null, duration: duration, serial: serial,
@@ -505,14 +520,14 @@
             // SkipDB — по IMDb ID, фільми і серіали, з корекцією під реліз
             if (!flag('nfx_skip_skipdb', 'true')) return [];
             return resolveImdb(card, serial).then(function (imdb) {
-                return skipdb(imdb, s_season, s_episode, 0);
+                return skipdb(imdb, s_season, s_episode, exact);
             });
         }).then(function (list) {
             if (list.length) return list;
 
             // TheIntroDB — по TMDB ID, kinopoisk_id не потрібен
             if (!flag('nfx_skip_introdb', 'true')) return [];
-            return introdb(card, s_season, s_episode, duration);
+            return introdb(card, s_season, s_episode, exact);
         }).then(function (list) {
             if (list.length || !serial || !flag('nfx_skip_anime', 'true')) return list;
             if (!isAnime(card)) return list;
@@ -790,7 +805,7 @@
             if (time >= marks.intro.start && time < marks.intro.end - 1) {
                 if (intro_mode === 'auto') {
                     done.intro = true;
-                    seekTo(marks.intro.end);
+                    seekTo(introEnd(marks.intro));
                     noty('заставку пропущено');
                 } else if (!$wrap) {
                     showButton({
@@ -799,7 +814,7 @@
                         wait: wait,
                         action: function () {
                             done.intro = true;
-                            seekTo(marks.intro.end);
+                            seekTo(introEnd(marks.intro));
                         },
                         oncancel: function () { done.intro = true; }
                     });
@@ -856,9 +871,21 @@
      *  Підміна Lampa.Player.play
      * ------------------------------------------------------------------ */
 
+    /**
+     * Мітки в базах зроблені по іншому релізу, тому кінець заставки часто
+     * трохи пізніший за фактичний і пропуск зрізає перші кадри серії.
+     * Віднімаємо запас: краще додивитись останній кадр заставки, ніж втратити сюжет.
+     */
+    function introEnd(seg) {
+        if (!seg) return 0;
+        var offset = num('nfx_skip_offset', '2');
+        var end = seg.end - offset;
+        return end > seg.start ? end : seg.end;
+    }
+
     function segmentsFor(res) {
         var skip = [];
-        if (res.intro) skip.push({ start: res.intro.start, end: res.intro.end, name: res.intro.name });
+        if (res.intro) skip.push({ start: res.intro.start, end: introEnd(res.intro), name: res.intro.name });
         if (res.credits) skip.push({ start: res.credits.start, end: res.credits.end, name: res.credits.name });
         if (!skip.length) return null;
 
