@@ -4,16 +4,16 @@
     if (window.nfx_skip_plugin) return;
     window.nfx_skip_plugin = true;
 
-    var DB_URL = 'https://raw.githubusercontent.com/ipavlin98/lmp-series-skip-db/refs/heads/main/database/';
     var SKIPDB_API = 'https://api.skipdb.tv/api/segments';
     var INTRODB_API = 'https://api.theintrodb.org/v3/media';
+    var KPDB_URL = 'https://raw.githubusercontent.com/ipavlin98/lmp-series-skip-db/refs/heads/main/database/';
     var ANISKIP_API = 'https://api.aniskip.com/v2/skip-times';
     var ANILIST_API = 'https://graphql.anilist.co';
     var JIKAN_API = 'https://api.jikan.moe/v4/anime';
 
-    /* ------------------------------------------------------------------ *
-     *  Налаштування
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  1. Налаштування
+     * ================================================================== */
 
     function opt(key, def) {
         try {
@@ -62,16 +62,22 @@
         }
 
         param('nfx_skip_intro_mode',
-            { button: 'Кнопка (Netflix)', auto: 'Автоматично, без кнопки', off: 'Вимкнено' },
+            { button: 'Кнопка з автонатисканням', auto: 'Одразу, без кнопки', off: 'Вимкнено' },
             'button',
             'Пропуск заставки',
-            'Що робити на початку інтро');
+            'Що робити на початку заставки');
 
         param('nfx_skip_credits_mode',
-            { button: 'Кнопка (Netflix)', auto: 'Одразу, без кнопки', off: 'Вимкнено' },
+            { button: 'Кнопка з автонатисканням', auto: 'Одразу, без кнопки', off: 'Вимкнено' },
             'button',
-            'Титри / наступна серія',
+            'Титри та наступна серія',
             'Що робити на фінальних титрах');
+
+        param('nfx_skip_wait',
+            { 2: '2 секунди', 3: '3 секунди', 5: '5 секунд', 8: '8 секунд', 0: 'Не натискати само' },
+            '3',
+            'Автонатискання',
+            'За скільки кнопка заповнюється білим і спрацьовує сама');
 
         param('nfx_skip_offset',
             { 0: 'Без запасу', 1: '1 секунда', 2: '2 секунди', 3: '3 секунди', 5: '5 секунд' },
@@ -79,64 +85,58 @@
             'Запас при пропуску',
             'Перемотує на стільки раніше кінця заставки, щоб не зрізати початок серії');
 
-        param('nfx_skip_wait',
-            { 3: '3 секунди', 4: '4 секунди', 5: '5 секунд', 8: '8 секунд' },
-            '4',
-            'Заповнення кнопки',
-            'Скільки кнопка заповнюється білим до автопропуску');
-
         param('nfx_skip_tail_tv',
             { off: 'Вимкнено', 60: 'за 1 хв до кінця', 90: 'за 1,5 хв до кінця', 120: 'за 2 хв до кінця', 180: 'за 3 хв до кінця' },
             '90',
             'Серіали без мітки титрів',
-            'Якщо в базі немає мітки титрів — рахувати від тривалості серії');
+            'Якщо мітки титрів немає в базах — рахувати від тривалості серії');
 
         param('nfx_skip_movie_tail',
             { off: 'Вимкнено', 180: 'за 3 хв до кінця', 300: 'за 5 хв до кінця', 420: 'за 7 хв до кінця', 600: 'за 10 хв до кінця' },
             '300',
-            'Титри у фільмах',
-            'Для фільмів бази міток немає — позиція титрів рахується від тривалості');
+            'Фільми без мітки титрів',
+            'Те саме для фільмів');
 
         param('nfx_skip_skipdb',
             { true: 'Увімкнено', false: 'Вимкнено' },
             'true',
-            'SkipDB',
-            'Відкрита база по IMDb ID: заставка, рекап, титри, прев\'ю. Фільми і серіали');
+            'База SkipDB',
+            'По IMDb ID, фільми і серіали, з корекцією під конкретний реліз');
 
         param('nfx_skip_introdb',
             { true: 'Увімкнено', false: 'Вимкнено' },
             'true',
-            'TheIntroDB',
-            'Публічна база міток по TMDB ID — працює без kinopoisk_id, у т.ч. для фільмів');
+            'База TheIntroDB',
+            'По TMDB ID, працює без kinopoisk_id');
 
         param('nfx_skip_anime',
             { true: 'Увімкнено', false: 'Вимкнено' },
             'true',
-            'Аніме через AniSkip',
-            'Додаткове джерело міток для аніме (опенінг/ендінг)');
+            'База AniSkip',
+            'Опенінги та ендінги для аніме');
 
-        param('nfx_skip_button_style',
-            { nfx: 'Своя кнопка (Netflix)', lampa: 'Вбудована кнопка Lampa' },
-            'nfx',
-            'Вигляд кнопки',
-            'Тільки для вбудованого веб-плеєра Lampa. На tvOS Pro кнопку малює сам додаток');
+        param('nfx_skip_probe',
+            { false: 'Вимкнено', true: 'Увімкнено' },
+            'false',
+            'Тест кнопки поверх плеєра',
+            'Малює кнопку по секундоміру від старту — щоб перевірити, чи видно HTML поверх tvOS Pro');
 
         param('nfx_skip_demo',
             { false: 'Вимкнено', true: 'Увімкнено' },
             'false',
-            'Тестовий режим',
-            'Ставить інтро 10-40 сек і титри за 60 сек до кінця на будь-якому відео');
+            'Демо-режим',
+            'Підставляє заставку 10-40 сек на будь-якому відео');
 
         param('nfx_skip_noty',
             { true: 'Показувати', false: 'Не показувати' },
             'true',
             'Повідомлення',
-            'Сповіщення про знайдені мітки та ID');
+            'Сповіщення про знайдені мітки та джерело');
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Робота з мітками
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  2. Мітки: нормалізація і класифікація
+     * ================================================================== */
 
     function toSeg(raw) {
         var start = parseFloat(raw.start);
@@ -155,7 +155,6 @@
         return out.sort(function (a, b) { return a.start - b.start; });
     }
 
-    // Титри чи інтро. duration може бути 0 — тоді тільки за назвою.
     function isCredits(seg, duration) {
         var name = (seg.name || '').toLowerCase();
         if (name.indexOf('титр') !== -1 || name.indexOf('credit') !== -1 ||
@@ -165,13 +164,37 @@
         return false;
     }
 
+    function splitSegments(list, duration) {
+        var res = { intro: null, credits: null };
+        normalize(list).forEach(function (seg) {
+            if (isCredits(seg, duration)) {
+                if (!res.credits || seg.start < res.credits.start) res.credits = seg;
+            } else if (!res.intro) {
+                res.intro = seg;
+            }
+        });
+        return res;
+    }
+
     function hasSegments(obj) {
         return !!(obj && obj.segments && obj.segments.skip && obj.segments.skip.length);
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Джерела
-     * ------------------------------------------------------------------ */
+    /**
+     * Мітки в базах зроблені по іншому релізу, тому кінець заставки часто
+     * пізніший за фактичний і пропуск зрізає перші кадри серії.
+     * Віднімаємо запас: краще додивитись хвіст заставки, ніж втратити сюжет.
+     */
+    function introEnd(seg) {
+        if (!seg) return 0;
+        var offset = num('nfx_skip_offset', '2');
+        var end = seg.end - offset;
+        return end > seg.start ? end : seg.end;
+    }
+
+    /* ================================================================== *
+     *  3. Ідентифікатори
+     * ================================================================== */
 
     function kpId(card) {
         if (!card) return null;
@@ -193,10 +216,15 @@
         return /^tt\d+$/.test(id) ? id : null;
     }
 
-    /**
-     * SkipDB працює ТІЛЬКИ по IMDb ID. У картці Lampa його часто немає,
-     * тому дотягуємо через TMDB external_ids — ключ і проксі беремо в самої Lampa.
-     */
+    function fetchJson(url, options) {
+        return fetch(url, options).then(function (res) {
+            if (!res.ok) return null;
+            return res.json();
+        })['catch'](function () { return null; });
+    }
+
+    // SkipDB працює тільки по IMDb ID. У картці Lampa його часто немає,
+    // тому дотягуємо через TMDB external_ids — ключ і проксі беремо в самої Lampa.
     var imdb_cache = {};
 
     function resolveImdb(card, serial) {
@@ -209,22 +237,34 @@
         var key = (serial ? 'tv' : 'movie') + '/' + tmdb;
         if (imdb_cache[key] !== undefined) return Promise.resolve(imdb_cache[key]);
 
-        var url = Lampa.TMDB.api(key + '/external_ids?api_key=' + Lampa.TMDB.key());
-
-        return fetchJson(url).then(function (data) {
+        return fetchJson(Lampa.TMDB.api(key + '/external_ids?api_key=' + Lampa.TMDB.key())).then(function (data) {
             var id = data && data.imdb_id;
             id = /^tt\d+$/.test(id || '') ? id : null;
             imdb_cache[key] = id;
-            log('imdb resolved', tmdb, '->', id);
+            log('imdb', tmdb, '->', id);
             return id;
         })['catch'](function () { return null; });
     }
 
+    /* ================================================================== *
+     *  4. Джерела міток
+     * ================================================================== */
+
+    function kpdb(id, season, episode) {
+        if (!id) return Promise.resolve({ list: [], db: null });
+
+        return fetchJson(KPDB_URL + id + '.json').then(function (db) {
+            if (!db) return { list: [], db: null };
+            var s = String(season);
+            var e = String(episode);
+            var list = (db[s] && db[s][e]) || db.movie || [];
+            return { list: list, db: db };
+        });
+    }
+
     /**
-     * SkipDB — відкрита база (ODbL), intro / recap / outro / preview, фільми і серіали.
-     * Головна перевага: приймає duration потоку і зсуває мітки для релізів,
-     * що відрізняються на 15 сек (зайве лого на початку) — це саме про торренти.
-     * Читання відкрите, 120 запитів/хв.
+     * SkipDB — відкрита база (ODbL): intro / recap / outro / preview.
+     * duration у секундах вмикає зсув міток під реліз, що відрізняється до 15 сек.
      */
     function skipdb(imdb, season, episode, duration) {
         if (!imdb) return Promise.resolve([]);
@@ -244,10 +284,10 @@
 
             function add(item, name) {
                 if (!item) return;
-                // out-of-range означає, що найближчі дані надто відрізняються — не беремо
+                // найближчі дані надто відрізняються від нашого потоку — не беремо
                 if (item.match === 'out-of-range') return;
                 var start = (item.start_ms || 0) / 1000;
-                var end = item.end_ms === null || item.end_ms === undefined
+                var end = (item.end_ms === null || item.end_ms === undefined)
                     ? (duration > 0 ? duration : start + 600)
                     : item.end_ms / 1000;
                 if (end > start) out.push({ start: start, end: end, name: name });
@@ -257,15 +297,14 @@
             add(seg.intro, 'Пропустити заставку');
             add(seg.outro, 'Пропустити титри');
 
-            log('skipdb', imdb, out.length + ' сегментів');
+            log('skipdb', imdb, out.length);
             return out;
         });
     }
 
     /**
-     * TheIntroDB — публічна краудсорсна база, ключована TMDB ID (imdb як запасний).
-     * Ключ API потрібен лише для відправки міток, читання відкрите.
-     * Час віддається в мілісекундах; start_ms: null = з початку, end_ms: null = до кінця.
+     * TheIntroDB — краудсорсна база по TMDB ID (imdb як запасний).
+     * start_ms: null = з початку, end_ms: null = до кінця файлу.
      */
     function introdb(card, season, episode, duration) {
         var tmdb = tmdbId(card);
@@ -288,16 +327,14 @@
             function add(list, name, needStart) {
                 if (!Array.isArray(list)) return;
                 list.forEach(function (seg) {
-                    var raw_start = seg.start_ms;
-                    var raw_end = seg.end_ms;
+                    var rs = seg.start_ms;
+                    var re = seg.end_ms;
+                    if (needStart && (rs === null || rs === undefined)) return;
 
-                    // титри без початку — сміття, пропускаємо
-                    if (needStart && (raw_start === null || raw_start === undefined)) return;
-
-                    var start = (raw_start === null || raw_start === undefined) ? 0 : raw_start / 1000;
-                    var end = (raw_end === null || raw_end === undefined)
+                    var start = (rs === null || rs === undefined) ? 0 : rs / 1000;
+                    var end = (re === null || re === undefined)
                         ? (duration > 0 ? duration : start + 600)
-                        : raw_end / 1000;
+                        : re / 1000;
 
                     if (end > start) out.push({ start: start, end: end, name: name });
                 });
@@ -307,25 +344,9 @@
             add(data.recap, 'Пропустити рекап', false);
             add(data.credits, 'Пропустити титри', true);
 
-            log('introdb', tmdb || imdb, out.length + ' сегментів');
+            log('introdb', tmdb || imdb, out.length);
             return out;
         });
-    }
-
-    function fetchJson(url, opts) {
-        return fetch(url, opts).then(function (res) {
-            if (!res.ok) return null;
-            return res.json();
-        })['catch'](function () { return null; });
-    }
-
-    function fromDb(db, season, episode) {
-        if (!db) return null;
-        var s = String(season);
-        var e = String(episode);
-        if (db[s] && db[s][e]) return db[s][e];
-        if (db.movie) return db.movie;
-        return null;
     }
 
     function isAnime(card) {
@@ -365,6 +386,7 @@
 
     function aniskip(mal, episode) {
         var url = ANISKIP_API + '/' + mal + '/' + episode + '?types=op&types=ed&types=recap&episodeLength=0';
+
         return fetchJson(url).then(function (data) {
             if (!data || !data.found || !data.results) return [];
             return data.results.map(function (r) {
@@ -379,9 +401,9 @@
         });
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Розбір даних плеєра
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  5. Розбір даних плеєра
+     * ================================================================== */
 
     function getCard(data) {
         var card = data.movie || data.card;
@@ -399,6 +421,7 @@
                 episode: parseInt(data.episode || data.e || data.episode_number) || 1
             };
         }
+
         if (data.playlist && Array.isArray(data.playlist)) {
             var i = data.playlist.findIndex(function (p) { return p.url && p.url === data.url; });
             if (i !== -1) {
@@ -409,6 +432,7 @@
                 };
             }
         }
+
         return { season: 1, episode: 1 };
     }
 
@@ -419,7 +443,7 @@
         return !!(card.original_name && !card.original_title);
     }
 
-    // Орієнтовна тривалість у секундах з картки TMDB
+    // Орієнтовна тривалість з картки TMDB
     function runtimeSec(card, serial) {
         if (!card) return 0;
 
@@ -433,19 +457,17 @@
         }
 
         var r = parseFloat(card.runtime || (card.movie && card.movie.runtime));
-        if (!isNaN(r) && r > 0) return r * 60;
-        return 0;
+        return (!isNaN(r) && r > 0) ? r * 60 : 0;
     }
 
-    // Фактична тривалість файлу, якщо Lampa вже зберегла її після попереднього перегляду.
-    // Це справжня довжина конкретного релізу, на відміну від runtime з картки TMDB.
+    // Фактична тривалість файлу, якщо Lampa зберегла її з попереднього перегляду
     function knownDuration(data) {
         var d = (data.timeline && data.timeline.duration) || data.duration || 0;
         d = parseFloat(d);
-        return !isNaN(d) && d > 60 ? d : 0;
+        return (!isNaN(d) && d > 60) ? d : 0;
     }
 
-    // Куди піде відео: у вбудований веб-плеєр Lampa чи в зовнішній (tvOS Pro, Infuse, VLC...)
+    // Куди піде відео: у вбудований веб-плеєр Lampa чи в зовнішній (tvOS Pro, Infuse, VLC)
     function isExternal(data) {
         try {
             var need = 'player' + (data.torrent_hash ? '_torrent' : '');
@@ -458,27 +480,9 @@
         }
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Збір міток для поточного відео
-     * ------------------------------------------------------------------ */
-
-    var marks = { intro: null, credits: null, duration: 0, serial: false, ready: false };
-
-    function resetMarks() {
-        marks = { intro: null, credits: null, duration: 0, serial: false, ready: false };
-    }
-
-    function splitSegments(list, duration) {
-        var res = { intro: null, credits: null };
-        normalize(list).forEach(function (seg) {
-            if (isCredits(seg, duration)) {
-                if (!res.credits || seg.start < res.credits.start) res.credits = seg;
-            } else if (!res.intro) {
-                res.intro = seg;
-            }
-        });
-        return res;
-    }
+    /* ================================================================== *
+     *  6. Збір міток
+     * ================================================================== */
 
     function collect(data) {
         var card = getCard(data);
@@ -488,74 +492,82 @@
         var duration = exact || runtimeSec(card, serial);
 
         var base = {
-            intro: null, credits: null, duration: duration, serial: serial,
-            derived: false, db: null, season: pos.season, episode: pos.episode
+            intro: null, credits: null,
+            duration: duration, serial: serial, derived: false,
+            db: null, season: pos.season, episode: pos.episode,
+            source: ''
         };
 
         if (flag('nfx_skip_demo', 'false')) {
-            noty('демо-режим, інтро 10-40 сек');
             base.intro = { start: 10, end: 40, name: 'Пропустити заставку' };
             base.duration = 0;
+            base.source = 'демо';
             return Promise.resolve(base);
         }
 
         if (!card) return Promise.resolve(base);
 
-        var id = kpId(card);
-        var chain = Promise.resolve({ list: [], db: null });
-
-        if (id) {
-            chain = fetchJson(DB_URL + id + '.json').then(function (db) {
-                return { list: fromDb(db, pos.season, serial ? pos.episode : 1) || [], db: db };
-            });
-        }
-
         var s_season = serial ? pos.season : 0;
         var s_episode = serial ? pos.episode : 0;
 
-        return chain.then(function (got) {
+        return kpdb(kpId(card), pos.season, serial ? pos.episode : 1).then(function (got) {
             base.db = got.db;
-            if (got.list.length) return got.list;
+            if (got.list.length) {
+                base.source = 'KP-база';
+                return got.list;
+            }
 
-            // SkipDB — по IMDb ID, фільми і серіали, з корекцією під реліз
             if (!flag('nfx_skip_skipdb', 'true')) return [];
+
             return resolveImdb(card, serial).then(function (imdb) {
                 return skipdb(imdb, s_season, s_episode, exact);
+            }).then(function (list) {
+                if (list.length) base.source = 'SkipDB';
+                return list;
             });
         }).then(function (list) {
             if (list.length) return list;
-
-            // TheIntroDB — по TMDB ID, kinopoisk_id не потрібен
             if (!flag('nfx_skip_introdb', 'true')) return [];
-            return introdb(card, s_season, s_episode, exact);
+
+            return introdb(card, s_season, s_episode, exact).then(function (res) {
+                if (res.length) base.source = 'TheIntroDB';
+                return res;
+            });
         }).then(function (list) {
             if (list.length || !serial || !flag('nfx_skip_anime', 'true')) return list;
             if (!isAnime(card)) return list;
 
             var title = card.original_name || card.original_title || card.name || card.title || '';
             var year = (card.first_air_date || card.release_date || '').slice(0, 4);
+
             return malId(title.replace(/[:\-]/g, ' ').trim(), pos.season, year).then(function (mal) {
                 if (!mal) return [];
-                return aniskip(mal, pos.episode);
+                return aniskip(mal, pos.episode).then(function (res) {
+                    if (res.length) base.source = 'AniSkip';
+                    return res;
+                });
             });
         }).then(function (list) {
             var split = splitSegments(list, duration);
             base.intro = split.intro;
             base.credits = split.credits;
 
-            // Мітки титрів у базі немає — рахуємо від орієнтовної тривалості.
-            // Для вбудованого плеєра це потім уточнюється по фактичній тривалості файлу.
+            // Титрів немає в жодній базі — рахуємо від тривалості
             var tail = serial ? opt('nfx_skip_tail_tv', '90') : opt('nfx_skip_movie_tail', '300');
             if (!base.credits && duration > 0 && tail !== 'off' && tail !== false) {
                 var st = duration - parseFloat(tail);
                 if (st > 60) {
                     base.credits = { start: st, end: duration, name: 'Пропустити титри' };
                     base.derived = true;
+                    if (!base.source) base.source = 'розрахунок';
                 }
             }
 
-            log('marks', { intro: base.intro, credits: base.credits, duration: base.duration, serial: base.serial, derived: base.derived },
-                'kp', id, 'tmdb', tmdbId(card), 'imdb', imdbId(card));
+            log('marks', {
+                intro: base.intro, credits: base.credits,
+                source: base.source, serial: serial, duration: duration
+            }, 'kp', kpId(card), 'tmdb', tmdbId(card), 'imdb', imdbId(card));
+
             return base;
         })['catch'](function (e) {
             log('collect error', e);
@@ -563,8 +575,25 @@
         });
     }
 
-    // Мітки для всіх серій у плейлисті — потрібно зовнішнім плеєрам,
-    // які самі гортають плейлист і більше не повертаються у WebView
+    /* ================================================================== *
+     *  7. Передача міток зовнішньому плеєру
+     * ================================================================== */
+
+    function segmentsFor(res) {
+        var skip = [];
+        if (res.intro) skip.push({ start: res.intro.start, end: introEnd(res.intro), name: res.intro.name });
+        if (res.credits) skip.push({ start: res.credits.start, end: res.credits.end, name: res.credits.name });
+        if (!skip.length) return null;
+
+        var out = { skip: skip };
+        // duration_ms тільки для власноруч порахованих міток: Lampa підганяє їх
+        // під фактичну тривалість. Для міток з бази це зіпсувало б час.
+        if (res.derived && res.duration > 0) out.duration_ms = res.duration * 1000;
+        return out;
+    }
+
+    // Зовнішній плеєр отримує весь плейлист одразу і гортає серії сам,
+    // у WebView більше не повертається — тому мітки треба на кожну серію
     function fillPlaylist(data, res) {
         if (!data.playlist || !Array.isArray(data.playlist)) return 0;
 
@@ -580,14 +609,13 @@
             } else if (res.db && res.serial) {
                 var season = parseInt(item.season || item.s || res.season) || res.season;
                 var episode = parseInt(item.episode || item.e || item.episode_number || i + 1);
-                var list = fromDb(res.db, season, episode);
+                var list = (res.db[String(season)] && res.db[String(season)][String(episode)]) || null;
+
                 if (list && list.length) {
-                    var split = splitSegments(normalize(list), 0);
+                    var split = splitSegments(list, 0);
                     segments = segmentsFor({
-                        intro: split.intro,
-                        credits: split.credits,
-                        duration: 0,
-                        derived: false
+                        intro: split.intro, credits: split.credits,
+                        duration: 0, derived: false
                     });
                 }
             }
@@ -601,23 +629,23 @@
         return count;
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Netflix-кнопка для вбудованого веб-плеєра
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  8. Кнопка в стилі Netflix
+     * ================================================================== */
 
     function initStyle() {
         var css = document.createElement('style');
         css.textContent = [
-            '.nfx-skip{position:absolute;right:2.5em;bottom:2.5em;z-index:200;',
+            '.nfx-skip{position:fixed;right:3em;bottom:3em;z-index:9999999;',
             'display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;',
-            '-webkit-transition:bottom .3s;transition:bottom .3s}',
+            'pointer-events:auto;-webkit-transition:bottom .3s;transition:bottom .3s}',
 
             '.nfx-btn{position:relative;display:-webkit-box;display:flex;',
             '-webkit-box-align:center;align-items:center;-webkit-box-pack:center;justify-content:center;',
             'height:2.6em;padding:0 1.6em;margin-left:.7em;overflow:hidden;cursor:pointer;',
             '-webkit-border-radius:2em;border-radius:2em;',
             'background:rgba(255,255,255,.35);color:#141414;',
-            'font-size:1.3em;font-weight:700;white-space:nowrap}',
+            'font-size:1.3em;font-weight:700;font-family:inherit;white-space:nowrap}',
 
             '.nfx-btn--ghost{background:rgba(255,255,255,.22);color:#fff;font-weight:600}',
 
@@ -630,8 +658,7 @@
             '-webkit-box-align:center;align-items:center}',
             '.nfx-btn__icon{width:1em;height:1em;margin-right:.55em;fill:currentColor}',
 
-            '.nfx-btn.focus{background:rgba(255,255,255,.6);',
-            'box-shadow:0 0 0 .13em #fff}',
+            '.nfx-btn.focus{background:rgba(255,255,255,.6);box-shadow:0 0 0 .13em #fff}',
             '.nfx-btn--ghost.focus{background:#fff;color:#141414}',
 
             '.player--panel-visible .nfx-skip{bottom:12em}'
@@ -639,17 +666,22 @@
         document.head.appendChild(css);
     }
 
+    var ICON = '<svg class="nfx-btn__icon" viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20"/></svg>';
+
     var $wrap = null;
     var $main = null;
     var btn_timer = null;
     var btn_action = null;
 
-    var ICON = '<svg class="nfx-btn__icon" viewBox="0 0 24 24"><polygon points="6,4 20,12 6,20"/></svg>';
+    function buttonVisible() {
+        return !!$wrap;
+    }
 
     function hideButton() {
         if (btn_timer) { clearTimeout(btn_timer); btn_timer = null; }
         btn_action = null;
         if ($wrap) { $wrap.remove(); $wrap = null; $main = null; }
+
         try {
             if (Lampa.Controller.enabled() && Lampa.Controller.enabled().name === 'nfx_skip') {
                 Lampa.Controller.toggle('player');
@@ -667,10 +699,14 @@
             left: function () { Lampa.Controller.move('left'); },
             right: function () { Lampa.Controller.move('right'); },
             up: function () {
-                if (Lampa.PlayerPanel.visibleStatus()) Lampa.PlayerPanel.hide();
-                else Lampa.PlayerPanel.reveal();
+                try {
+                    if (Lampa.PlayerPanel.visibleStatus()) Lampa.PlayerPanel.hide();
+                    else Lampa.PlayerPanel.reveal();
+                } catch (e) {}
             },
-            down: function () { Lampa.PlayerPanel.toggle(); },
+            down: function () {
+                try { Lampa.PlayerPanel.toggle(); } catch (e) {}
+            },
             gone: function () { if ($wrap) $wrap.find('.nfx-btn').removeClass('focus'); },
             back: function () { hideButton(); }
         });
@@ -687,8 +723,7 @@
         $wrap = $('<div class="nfx-skip"></div>');
 
         if (o.cancel) {
-            var $ghost = $('<div class="nfx-btn nfx-btn--ghost selector">' +
-                '<div class="nfx-btn__in">' + o.cancel + '</div></div>');
+            var $ghost = $('<div class="nfx-btn nfx-btn--ghost selector"><div class="nfx-btn__in">' + o.cancel + '</div></div>');
             $ghost.on('hover:enter click', function () {
                 var stop = o.oncancel;
                 hideButton();
@@ -708,18 +743,21 @@
         });
 
         $wrap.append($main);
-        $(Lampa.Player.render()).append($wrap);
+
+        // position:fixed + максимальний z-index у body, а не в контейнері плеєра,
+        // щоб кнопка не залежала від того, який шар зараз зверху
+        $('body').append($wrap);
 
         var wait = o.wait;
-        var $fill = $main.find('.nfx-btn__fill');
 
         if (wait > 0) {
+            var $fill = $main.find('.nfx-btn__fill');
             $fill.css({
                 '-webkit-transition': '-webkit-transform ' + wait + 's linear',
                 transition: 'transform ' + wait + 's linear'
             });
-            // reflow, інакше браузер склеїть встановлення класу і transition в один кадр
-            $fill[0].offsetWidth;
+            // reflow, інакше браузер склеїть клас і transition в один кадр
+            if ($fill[0]) $fill[0].offsetWidth;
             $fill.addClass('nfx-btn__fill--run');
 
             btn_timer = setTimeout(function () {
@@ -737,42 +775,88 @@
         } catch (e) {}
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Дії
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  9. Дії
+     * ================================================================== */
+
+    // Перемотка існує тільки для вбудованого <video>: Lampa.PlayerVideo.to()
+    // виставляє video.currentTime. Зовнішній плеєр з JS не перемотати —
+    // там пропуск робить сам додаток по переданих segments.
+    function canSeek() {
+        try { return !!(Lampa.PlayerVideo && Lampa.PlayerVideo.video && Lampa.PlayerVideo.video()); }
+        catch (e) { return false; }
+    }
 
     function seekTo(sec) {
+        if (!canSeek()) {
+            noty('кнопка видима, але перемотати зовнішній плеєр з JS неможливо');
+            return false;
+        }
+
         try {
             var video = Lampa.PlayerVideo.video();
             var dur = video ? video.duration || 0 : 0;
             Lampa.PlayerVideo.to(dur ? Math.min(sec, dur - 1) : sec);
-        } catch (e) { log('seek error', e); }
+            return true;
+        } catch (e) {
+            log('seek error', e);
+            return false;
+        }
+    }
+
+    function canNext() {
+        try { return !!(marks && marks.serial && Lampa.PlayerPlaylist.canNext && Lampa.PlayerPlaylist.canNext()); }
+        catch (e) { return false; }
     }
 
     function finish() {
         try {
-            if (marks.serial && Lampa.PlayerPlaylist.canNext && Lampa.PlayerPlaylist.canNext()) {
-                Lampa.PlayerPlaylist.next();
-            } else {
-                Lampa.Player.close();
-            }
+            if (canNext()) Lampa.PlayerPlaylist.next();
+            else Lampa.Player.close();
         } catch (e) {
             try { Lampa.Player.close(); } catch (e2) {}
         }
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Спостереження за часом (вбудований плеєр)
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  10. Стан і годинник відтворення
+     * ================================================================== */
 
-    var done = { intro: false, credits: false, tail: false };
+    var marks = null;
+    var done = null;
+    var clock = null;
 
-    function canNext() {
-        try { return !!(marks.serial && Lampa.PlayerPlaylist.canNext && Lampa.PlayerPlaylist.canNext()); }
-        catch (e) { return false; }
+    function resetState() {
+        hideButton();
+        if (clock && clock.timer) clearInterval(clock.timer);
+
+        marks = { intro: null, credits: null, duration: 0, serial: false, ready: false };
+        done = { intro: false, credits: false, tail: false };
+        clock = { t0: 0, video: false, timer: null };
     }
 
-    // Мітка титрів з фактичної тривалості файлу, якщо в базі її немає
+    // Секундомір від моменту запуску. Єдиний доступний відлік, коли відео
+    // грає в зовнішньому плеєрі і подій timeupdate немає.
+    function startClock() {
+        clock.t0 = Date.now();
+        clock.video = false;
+
+        if (clock.timer) clearInterval(clock.timer);
+        clock.timer = setInterval(function () {
+            if (clock.video) return;
+            if (!flag('nfx_skip_probe', 'false')) return;
+            try {
+                watch({ current: (Date.now() - clock.t0) / 1000, duration: 0 });
+            } catch (e) {
+                log('probe error', e);
+            }
+        }, 500);
+    }
+
+    /* ================================================================== *
+     *  11. Логіка показу
+     * ================================================================== */
+
     function deriveCredits(duration) {
         if (done.tail || marks.credits || !duration) return;
         done.tail = true;
@@ -782,21 +866,19 @@
 
         var start = duration - parseFloat(tail);
         if (start > 60) {
-            marks.credits = { start: start, end: duration, name: '' };
+            marks.credits = { start: start, end: duration, name: 'Пропустити титри' };
             marks.duration = duration;
-            log('credits derived from duration', marks.credits);
         }
     }
 
     function watch(e) {
-        if (!marks.ready) return;
-        if (opt('nfx_skip_button_style', 'nfx') !== 'nfx') return;
+        if (!marks || !marks.ready) return;
 
         var time = e.current || 0;
         var duration = e.duration || 0;
         if (!time) return;
 
-        var wait = num('nfx_skip_wait', '4');
+        var wait = num('nfx_skip_wait', '3');
         var intro_mode = opt('nfx_skip_intro_mode', 'button');
         var credits_mode = opt('nfx_skip_credits_mode', 'button');
 
@@ -805,11 +887,10 @@
             if (time >= marks.intro.start && time < marks.intro.end - 1) {
                 if (intro_mode === 'auto') {
                     done.intro = true;
-                    seekTo(introEnd(marks.intro));
-                    noty('заставку пропущено');
-                } else if (!$wrap) {
+                    if (seekTo(introEnd(marks.intro))) noty('заставку пропущено');
+                } else if (!buttonVisible()) {
                     showButton({
-                        title: 'Пропустити заставку',
+                        title: marks.intro.name || 'Пропустити заставку',
                         cancel: 'Дивитися',
                         wait: wait,
                         action: function () {
@@ -828,7 +909,7 @@
         /* --- титри --- */
         if (credits_mode === 'off') return;
 
-        // фільм: мітка порахована з runtime картки, а реальний файл може бути іншої тривалості
+        // мітка порахована з тривалості картки, а файл може бути іншої довжини
         if (marks.credits && duration > 0 && marks.duration > 0 && Math.abs(duration - marks.duration) > 10) {
             var shift = duration - marks.duration;
             marks.credits = {
@@ -842,8 +923,6 @@
         deriveCredits(duration);
 
         if (marks.credits && !done.credits && time >= marks.credits.start) {
-            var next = canNext();
-
             if (credits_mode === 'auto') {
                 done.credits = true;
                 hideButton();
@@ -851,7 +930,8 @@
                 return;
             }
 
-            if (!$wrap) {
+            if (!buttonVisible()) {
+                var next = canNext();
                 showButton({
                     title: next ? 'Наступний епізод' : 'Завершити перегляд',
                     icon: next,
@@ -867,33 +947,12 @@
         }
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Підміна Lampa.Player.play
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  12. Підміна Lampa.Player.play
+     * ================================================================== */
 
-    /**
-     * Мітки в базах зроблені по іншому релізу, тому кінець заставки часто
-     * трохи пізніший за фактичний і пропуск зрізає перші кадри серії.
-     * Віднімаємо запас: краще додивитись останній кадр заставки, ніж втратити сюжет.
-     */
-    function introEnd(seg) {
-        if (!seg) return 0;
-        var offset = num('nfx_skip_offset', '2');
-        var end = seg.end - offset;
-        return end > seg.start ? end : seg.end;
-    }
-
-    function segmentsFor(res) {
-        var skip = [];
-        if (res.intro) skip.push({ start: res.intro.start, end: introEnd(res.intro), name: res.intro.name });
-        if (res.credits) skip.push({ start: res.credits.start, end: res.credits.end, name: res.credits.name });
-        if (!skip.length) return null;
-
-        var out = { skip: skip };
-        // duration_ms — тільки для власноруч порахованих міток: Lampa підганяє їх
-        // під фактичну тривалість файлу. Для міток з бази це зіпсувало б час.
-        if (res.derived && res.duration > 0) out.duration_ms = res.duration * 1000;
-        return out;
+    function label(res) {
+        return res.serial ? 'S' + res.season + 'E' + res.episode : 'фільм';
     }
 
     function apply(data, res) {
@@ -907,38 +966,33 @@
         done = { intro: false, credits: false, tail: false };
 
         var external = isExternal(data);
-        var native_ui = external || opt('nfx_skip_button_style', 'nfx') !== 'nfx';
+        var found = !!(res.intro || res.credits);
 
-        var where = external ? 'зовнішній плеєр' : 'вбудований плеєр';
-
-        if (!native_ui) {
-            if (res.intro || res.credits) noty(label(res) + ' — мітки готові (' + where + ')');
-            else noty(label(res) + ' — міток немає');
+        if (!external) {
+            noty(label(res) + (found ? ' — мітки з ' + res.source : ' — міток немає'));
             return;
         }
 
-        // Зовнішній плеєр (tvOS Pro, Infuse, VLC) отримує мітки прямо в посиланні запуску:
+        // Зовнішній плеєр отримує мітки прямо в посиланні запуску:
         // lampa://video?player=tvospro&src=...&playlist=...&segments=...
         var segments = segmentsFor(res);
         if (segments && !hasSegments(data)) data.segments = segments;
 
         var filled = fillPlaylist(data, res);
 
-        marks.ready = false;
+        // Без timeupdate власна кнопка може працювати лише по секундоміру,
+        // тому поза режимом тесту вона тут не показується.
+        if (!flag('nfx_skip_probe', 'false')) marks.ready = false;
 
         if (segments || filled) {
-            noty(label(res) + ' — мітки передано в ' + where +
-                (filled ? ', серій у плейлисті: ' + filled : ''));
+            noty(label(res) + ' — мітки з ' + res.source + ' передано плеєру' +
+                (filled ? ', серій: ' + filled : ''));
         } else {
             noty(label(res) + ' — міток немає в жодній базі');
         }
 
-        log('launch segments', data.segments, 'playlist filled', filled,
+        log('launch', data.segments, 'playlist', filled,
             'lampa', (Lampa.Manifest && Lampa.Manifest.app_version) || '?');
-    }
-
-    function label(res) {
-        return res.serial ? 'S' + res.season + 'E' + res.episode : 'фільм';
     }
 
     function initPlayer() {
@@ -954,15 +1008,16 @@
         Lampa.Player.play = function (data) {
             var ctx = this;
 
-            var run = function () {
+            function run() {
                 original_play.call(ctx, data);
                 if (pending) {
                     try { Lampa.PlayerPlaylist.set(pending); } catch (e) {}
                     pending = null;
                 }
-            };
+                startClock();
+            }
 
-            resetMarks();
+            resetState();
 
             if (!data || !data.url) return run();
 
@@ -981,26 +1036,25 @@
         };
 
         Lampa.PlayerVideo.listener.follow('timeupdate', function (e) {
+            if (clock) clock.video = true;
             try { watch(e); } catch (err) { log('watch error', err); }
         });
 
         Lampa.Player.listener.follow('destroy', function () {
-            hideButton();
-            resetMarks();
+            resetState();
         });
     }
 
-    /* ------------------------------------------------------------------ *
-     *  Старт
-     * ------------------------------------------------------------------ */
+    /* ================================================================== *
+     *  13. Старт
+     * ================================================================== */
 
-    // Зовнішні плеєри отримують мітки через параметр &segments= у lampa://video.
-    // Він з'явився в Lampa 3.3.0 — на старіших збірках плагін нічого туди не передасть.
+    // Параметр &segments= у lampa://video з'явився в Lampa 3.3.0
     function checkVersion() {
         try {
             var v = (Lampa.Manifest && Lampa.Manifest.app_version) || '';
             var digital = parseInt(String(v).replace(/\./g, '')) || 0;
-            log('lampa version', v);
+            log('lampa', v);
             if (digital && digital < 330) {
                 noty('Lampa ' + v + ' — зовнішні плеєри не отримають мітки, потрібна 3.3.0+');
             }
@@ -1009,6 +1063,8 @@
 
     function start() {
         if (!window.Lampa || !Lampa.Player || !Lampa.PlayerVideo) return;
+
+        resetState();
         initStyle();
         initSettings();
         addController();
