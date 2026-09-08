@@ -115,24 +115,6 @@
             'База AniSkip',
             'Опенінги та ендінги для аніме');
 
-        param('nfx_skip_external_button',
-            { true: 'Показувати', false: 'Не показувати' },
-            'true',
-            'Кнопка на tvOS Pro',
-            'Своя кнопка поверх зовнішнього плеєра. Позиція рахується секундоміром від запуску');
-
-        param('nfx_skip_buffer',
-            { 0: 'Без поправки', 5: '5 секунд', 10: '10 секунд', 15: '15 секунд', 30: '30 секунд' },
-            '10',
-            'Поправка на буферизацію',
-            'Скільки триває розкрутка торента до першого кадру. Зсуває секундомір, щоб кнопка не вилазила зарано');
-
-        param('nfx_skip_external_seek',
-            { off: 'Тільки нативна кнопка', relaunch: 'Перезапуск потоку з позиції' },
-            'off',
-            'Перемотка на tvOS Pro',
-            'JS не може перемотати нативний плеєр. Перезапуск — експеримент: якщо додаток не розуміє position, відео почнеться спочатку');
-
         param('nfx_skip_demo',
             { false: 'Вимкнено', true: 'Увімкнено' },
             'false',
@@ -816,55 +798,6 @@
         }
     }
 
-    /**
-     * Перемотати зовнішній плеєр з JS неможливо. Єдине, що можна спробувати —
-     * перезапустити той самий потік новим lampa://video з параметром position.
-     * Шаблон беремо той самий, який будує сама Lampa у start(), плюс position.
-     * Параметр не задокументований — якщо додаток його не читає, відео
-     * почнеться спочатку, тому вмикається вручну в налаштуваннях.
-     */
-    var TVOS_PLAYERS = { tvospro: 'tvospro', tvos: 'tvos', tvosl: 'tvosav', tvosSelect: 'lists' };
-
-    function relaunch(position) {
-        var data = last_data;
-        if (!data || !data.url) return false;
-
-        try {
-            var field = 'player' + (data.torrent_hash ? '_torrent' : '');
-            var chosen = data.launch_player || Lampa.Storage.field(field);
-            var name = TVOS_PLAYERS[chosen];
-            if (!name) return false;
-
-            var src = Lampa.Torserver ? Lampa.Torserver.toPlayUrl(data.url) : data.url;
-
-            var url = 'lampa://video?player=' + name +
-                '&src=' + encodeURIComponent(src) +
-                '&playlist=' + (data.playlist ? encodeURIComponent(JSON.stringify(data.playlist)) : '') +
-                '&segments=' + (data.segments ? encodeURIComponent(JSON.stringify(data.segments)) : '') +
-                '&position=' + Math.floor(position);
-
-            log('relaunch', position);
-            window.location.assign(url);
-            return true;
-        } catch (e) {
-            log('relaunch error', e);
-            return false;
-        }
-    }
-
-    // Пропуск заставки: у вбудованому плеєрі перемотка, у зовнішньому — те,
-    // що вибрано в налаштуваннях. Повертає true, якщо дія справді відбулась.
-    function skipTo(sec) {
-        if (canSeek()) return seekTo(sec);
-
-        if (opt('nfx_skip_external_seek', 'off') === 'relaunch') {
-            if (relaunch(sec)) return true;
-        }
-
-        noty('перемотку робить сам плеєр — натисни його кнопку пропуску');
-        return false;
-    }
-
     function canNext() {
         try { return !!(marks && marks.serial && Lampa.PlayerPlaylist.canNext && Lampa.PlayerPlaylist.canNext()); }
         catch (e) { return false; }
@@ -885,38 +818,19 @@
 
     var marks = null;
     var done = null;
-    var clock = null;
-    var last_data = null;
 
     function resetState() {
         hideButton();
-        if (clock && clock.timer) clearInterval(clock.timer);
-
         marks = { intro: null, credits: null, duration: 0, serial: false, ready: false };
         done = { intro: false, credits: false, tail: false };
-        clock = { t0: 0, video: false, timer: null };
-        last_data = null;
     }
 
-    // Секундомір від моменту запуску. Єдиний доступний відлік позиції, коли
-    // відео грає в зовнішньому плеєрі: подій timeupdate звідти не надходить.
-    function startClock() {
-        clock.t0 = Date.now();
-        clock.video = false;
-
-        if (clock.timer) clearInterval(clock.timer);
-        clock.timer = setInterval(function () {
-            if (clock.video) return;
-            var buffer = num('nfx_skip_buffer', '10');
-            var current = (Date.now() - clock.t0) / 1000 - buffer;
-            if (current <= 0) return;
-            try {
-                watch({ current: current, duration: 0 });
-            } catch (e) {
-                log('clock error', e);
-            }
-        }, 500);
-    }
+    /*
+     * Позиція у відео береться ТІЛЬКИ з подій timeupdate вбудованого плеєра.
+     * Секундоміра від запуску тут свідомо немає: поки відео грає в зовнішньому
+     * плеєрі, WebView прихований, а намальована кнопка все одно спливе аж після
+     * виходу з плеєра — поверх інтерфейсу Lampa.
+     */
 
     /* ================================================================== *
      *  11. Логіка показу
@@ -952,14 +866,14 @@
             if (time >= marks.intro.start && time < marks.intro.end - 1) {
                 if (intro_mode === 'auto') {
                     done.intro = true;
-                    if (skipTo(introEnd(marks.intro))) noty('заставку пропущено');
+                    if (seekTo(introEnd(marks.intro))) noty('заставку пропущено');
                 } else if (!buttonVisible()) {
                     showButton({
                         title: marks.intro.name || 'Пропустити заставку',
                         cancel: 'Дивитися',
                         wait: wait,
                         action: function () {
-                            var ok = skipTo(introEnd(marks.intro));
+                            var ok = seekTo(introEnd(marks.intro));
                             if (ok) done.intro = true;
                             return ok;
                         },
@@ -1047,8 +961,8 @@
 
         var filled = fillPlaylist(data, res);
 
-        // Позиція для зовнішнього плеєра рахується секундоміром — вмикається окремо
-        if (!flag('nfx_skip_external_button', 'true')) marks.ready = false;
+        // Своєї кнопки на зовнішньому плеєрі бути не може: WebView прихований
+        marks.ready = false;
 
         if (segments || filled) {
             noty(label(res) + ' — мітки з ' + res.source + ' передано плеєру' +
@@ -1080,11 +994,9 @@
                     try { Lampa.PlayerPlaylist.set(pending); } catch (e) {}
                     pending = null;
                 }
-                startClock();
             }
 
             resetState();
-            last_data = data;   // після resetState, інакше буде затерто
 
             if (!data || !data.url) return run();
 
@@ -1103,13 +1015,31 @@
         };
 
         Lampa.PlayerVideo.listener.follow('timeupdate', function (e) {
-            if (clock) clock.video = true;
             try { watch(e); } catch (err) { log('watch error', err); }
         });
 
         Lampa.Player.listener.follow('destroy', function () {
             resetState();
         });
+
+        // Відео пішло в зовнішній плеєр — своя кнопка там не працює,
+        // і головне: вона не має вискочити на екрані після виходу з нього
+        Lampa.Player.listener.follow('external', function () {
+            resetState();
+        });
+
+        // Останній рубіж: будь-яка зміна екрана або повернення вкладки
+        try {
+            Lampa.Listener.follow('activity', function (e) {
+                if (e.type === 'start' || e.type === 'archive') resetState();
+            });
+        } catch (e) {}
+
+        try {
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden && buttonVisible() && !canSeek()) resetState();
+            });
+        } catch (e) {}
     }
 
     /* ================================================================== *
