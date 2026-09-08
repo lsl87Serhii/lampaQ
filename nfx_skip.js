@@ -115,11 +115,23 @@
             'База AniSkip',
             'Опенінги та ендінги для аніме');
 
-        param('nfx_skip_probe',
-            { false: 'Вимкнено', true: 'Увімкнено' },
-            'false',
-            'Тест кнопки поверх плеєра',
-            'Малює кнопку по секундоміру від старту — щоб перевірити, чи видно HTML поверх tvOS Pro');
+        param('nfx_skip_external_button',
+            { true: 'Показувати', false: 'Не показувати' },
+            'true',
+            'Кнопка на tvOS Pro',
+            'Своя кнопка поверх зовнішнього плеєра. Позиція рахується секундоміром від запуску');
+
+        param('nfx_skip_buffer',
+            { 0: 'Без поправки', 5: '5 секунд', 10: '10 секунд', 15: '15 секунд', 30: '30 секунд' },
+            '10',
+            'Поправка на буферизацію',
+            'Скільки триває розкрутка торента до першого кадру. Зсуває секундомір, щоб кнопка не вилазила зарано');
+
+        param('nfx_skip_external_seek',
+            { off: 'Тільки нативна кнопка', relaunch: 'Перезапуск потоку з позиції' },
+            'off',
+            'Перемотка на tvOS Pro',
+            'JS не може перемотати нативний плеєр. Перезапуск — експеримент: якщо додаток не розуміє position, відео почнеться спочатку');
 
         param('nfx_skip_demo',
             { false: 'Вимкнено', true: 'Увімкнено' },
@@ -738,8 +750,8 @@
 
         $main.on('hover:enter click', function () {
             var run = btn_action;
+            if (run && run() === false) return;   // не вийшло — лишаємо кнопку
             hideButton();
-            if (run) run();
         });
 
         $wrap.append($main);
@@ -762,8 +774,11 @@
 
             btn_timer = setTimeout(function () {
                 var run = btn_action;
-                hideButton();
-                if (run) run();
+                if (!run) return;
+                // Ховаємо тільки якщо дія справді відбулась. Якщо ні —
+                // кнопка лишається до кінця сегмента, щоб її можна було натиснути.
+                if (run() !== false) hideButton();
+                else btn_timer = null;
             }, wait * 1000);
         }
 
@@ -788,10 +803,7 @@
     }
 
     function seekTo(sec) {
-        if (!canSeek()) {
-            noty('кнопка видима, але перемотати зовнішній плеєр з JS неможливо');
-            return false;
-        }
+        if (!canSeek()) return false;
 
         try {
             var video = Lampa.PlayerVideo.video();
@@ -802,6 +814,55 @@
             log('seek error', e);
             return false;
         }
+    }
+
+    /**
+     * Перемотати зовнішній плеєр з JS неможливо. Єдине, що можна спробувати —
+     * перезапустити той самий потік новим lampa://video з параметром position.
+     * Шаблон беремо той самий, який будує сама Lampa у start(), плюс position.
+     * Параметр не задокументований — якщо додаток його не читає, відео
+     * почнеться спочатку, тому вмикається вручну в налаштуваннях.
+     */
+    var TVOS_PLAYERS = { tvospro: 'tvospro', tvos: 'tvos', tvosl: 'tvosav', tvosSelect: 'lists' };
+
+    function relaunch(position) {
+        var data = last_data;
+        if (!data || !data.url) return false;
+
+        try {
+            var field = 'player' + (data.torrent_hash ? '_torrent' : '');
+            var chosen = data.launch_player || Lampa.Storage.field(field);
+            var name = TVOS_PLAYERS[chosen];
+            if (!name) return false;
+
+            var src = Lampa.Torserver ? Lampa.Torserver.toPlayUrl(data.url) : data.url;
+
+            var url = 'lampa://video?player=' + name +
+                '&src=' + encodeURIComponent(src) +
+                '&playlist=' + (data.playlist ? encodeURIComponent(JSON.stringify(data.playlist)) : '') +
+                '&segments=' + (data.segments ? encodeURIComponent(JSON.stringify(data.segments)) : '') +
+                '&position=' + Math.floor(position);
+
+            log('relaunch', position);
+            window.location.assign(url);
+            return true;
+        } catch (e) {
+            log('relaunch error', e);
+            return false;
+        }
+    }
+
+    // Пропуск заставки: у вбудованому плеєрі перемотка, у зовнішньому — те,
+    // що вибрано в налаштуваннях. Повертає true, якщо дія справді відбулась.
+    function skipTo(sec) {
+        if (canSeek()) return seekTo(sec);
+
+        if (opt('nfx_skip_external_seek', 'off') === 'relaunch') {
+            if (relaunch(sec)) return true;
+        }
+
+        noty('перемотку робить сам плеєр — натисни його кнопку пропуску');
+        return false;
     }
 
     function canNext() {
@@ -825,6 +886,7 @@
     var marks = null;
     var done = null;
     var clock = null;
+    var last_data = null;
 
     function resetState() {
         hideButton();
@@ -833,10 +895,11 @@
         marks = { intro: null, credits: null, duration: 0, serial: false, ready: false };
         done = { intro: false, credits: false, tail: false };
         clock = { t0: 0, video: false, timer: null };
+        last_data = null;
     }
 
-    // Секундомір від моменту запуску. Єдиний доступний відлік, коли відео
-    // грає в зовнішньому плеєрі і подій timeupdate немає.
+    // Секундомір від моменту запуску. Єдиний доступний відлік позиції, коли
+    // відео грає в зовнішньому плеєрі: подій timeupdate звідти не надходить.
     function startClock() {
         clock.t0 = Date.now();
         clock.video = false;
@@ -844,11 +907,13 @@
         if (clock.timer) clearInterval(clock.timer);
         clock.timer = setInterval(function () {
             if (clock.video) return;
-            if (!flag('nfx_skip_probe', 'false')) return;
+            var buffer = num('nfx_skip_buffer', '10');
+            var current = (Date.now() - clock.t0) / 1000 - buffer;
+            if (current <= 0) return;
             try {
-                watch({ current: (Date.now() - clock.t0) / 1000, duration: 0 });
+                watch({ current: current, duration: 0 });
             } catch (e) {
-                log('probe error', e);
+                log('clock error', e);
             }
         }, 500);
     }
@@ -887,15 +952,16 @@
             if (time >= marks.intro.start && time < marks.intro.end - 1) {
                 if (intro_mode === 'auto') {
                     done.intro = true;
-                    if (seekTo(introEnd(marks.intro))) noty('заставку пропущено');
+                    if (skipTo(introEnd(marks.intro))) noty('заставку пропущено');
                 } else if (!buttonVisible()) {
                     showButton({
                         title: marks.intro.name || 'Пропустити заставку',
                         cancel: 'Дивитися',
                         wait: wait,
                         action: function () {
-                            done.intro = true;
-                            seekTo(introEnd(marks.intro));
+                            var ok = skipTo(introEnd(marks.intro));
+                            if (ok) done.intro = true;
+                            return ok;
                         },
                         oncancel: function () { done.intro = true; }
                     });
@@ -940,6 +1006,7 @@
                     action: function () {
                         done.credits = true;
                         finish();
+                        return true;
                     },
                     oncancel: function () { done.credits = true; }
                 });
@@ -980,9 +1047,8 @@
 
         var filled = fillPlaylist(data, res);
 
-        // Без timeupdate власна кнопка може працювати лише по секундоміру,
-        // тому поза режимом тесту вона тут не показується.
-        if (!flag('nfx_skip_probe', 'false')) marks.ready = false;
+        // Позиція для зовнішнього плеєра рахується секундоміром — вмикається окремо
+        if (!flag('nfx_skip_external_button', 'true')) marks.ready = false;
 
         if (segments || filled) {
             noty(label(res) + ' — мітки з ' + res.source + ' передано плеєру' +
@@ -1018,6 +1084,7 @@
             }
 
             resetState();
+            last_data = data;   // після resetState, інакше буде затерто
 
             if (!data || !data.url) return run();
 
