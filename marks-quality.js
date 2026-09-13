@@ -4,7 +4,7 @@
     if (typeof Lampa === 'undefined') return;
 
     var LOG = false;
-    var CACHE_KEY = 'marks_quality_cache_v25';
+    var CACHE_KEY = 'marks_quality_cache_v26';
     var CACHE_TIME = 12 * 60 * 60 * 1000; // 12 годин
     var REQ_TIMEOUT = 12000;
     var MAX_PARALLEL = 3;
@@ -18,7 +18,7 @@
     var active = 0;
 
     /* ------------------------------------------------------------------ *
-     *  HOST & API KEY RESOLUTION
+     *  DYNAMIC ACTIVE PARSER DETECTION
      * ------------------------------------------------------------------ */
 
     function normalizeHost(raw) {
@@ -31,33 +31,102 @@
         return raw ? (proto + raw) : '';
     }
 
-    function getJackettHost() {
+    function getActiveParserConfig() {
+        // 1. Ручне перевизначення у налаштуваннях плагіна (якщо вказано не "auto")
         var custom = Lampa.Storage.get('marks_jacred_url', 'auto');
-        if (custom && custom !== 'auto') return normalizeHost(custom);
-
-        var keys = ['jackett_url', 'spawnua_url', 'lampaua_url', 'parser_torrent_url', 'jacred_url', 'parser_url'];
-        for (var i = 0; i < keys.length; i++) {
-            var val = Lampa.Storage.get(keys[i], '');
-            if (val) {
-                var h = normalizeHost(val);
-                if (h) return h;
+        if (custom && String(custom).toLowerCase() !== 'auto') {
+            var manualHost = normalizeHost(custom);
+            if (manualHost) {
+                return { host: manualHost, key: getStorageKey('jackett_key') };
             }
         }
-        if (Lampa.Parser) {
+
+        // 2. Зчитування активного парсера безпосередньо з об'єкта Lampa.Parser
+        if (typeof Lampa !== 'undefined' && Lampa.Parser) {
             try {
                 var pUrl = typeof Lampa.Parser.url === 'function' ? Lampa.Parser.url() : Lampa.Parser.url;
-                if (pUrl) return normalizeHost(pUrl);
+                if (pUrl) {
+                    var normUrl = normalizeHost(pUrl);
+                    if (normUrl) {
+                        return { host: normUrl, key: getActiveKeyByHost(normUrl) };
+                    }
+                }
             } catch (e) {}
         }
-        return 'http://jackettua.mooo.com';
+
+        // 3. Зчитування типу обраного парсера із системних налаштувань Lampa
+        var activeType = String(
+            Lampa.Storage.get('parser_type', '') || 
+            Lampa.Storage.get('parser_torrent_type', '') || 
+            Lampa.Storage.get('parser_use', '') || ''
+        ).toLowerCase();
+
+        var parserPresets = [
+            { id: 'spawn', urlKey: 'spawnua_url', keyKey: 'spawnua_key' },
+            { id: 'lampaua', urlKey: 'lampaua_url', keyKey: 'lampaua_key' },
+            { id: 'jacred', urlKey: 'jacred_url', keyKey: 'jacred_key' },
+            { id: 'jackett', urlKey: 'jackett_url', keyKey: 'jackett_key' },
+            { id: 'parser', urlKey: 'parser_torrent_url', keyKey: 'parser_key' }
+        ];
+
+        for (var i = 0; i < parserPresets.length; i++) {
+            var preset = parserPresets[i];
+            if (activeType.indexOf(preset.id) >= 0) {
+                var u = Lampa.Storage.get(preset.urlKey, '');
+                if (u) {
+                    return {
+                        host: normalizeHost(u),
+                        key: getStorageKey(preset.keyKey)
+                    };
+                }
+            }
+        }
+
+        // 4. Резервний пошук першого заповненого URL у налаштуваннях Lampa
+        var fallbackMap = [
+            { url: 'parser_torrent_url', key: 'parser_key' },
+            { url: 'spawnua_url', key: 'spawnua_key' },
+            { url: 'lampaua_url', key: 'lampaua_key' },
+            { url: 'jackett_url', key: 'jackett_key' },
+            { url: 'jacred_url', key: 'jacred_key' },
+            { url: 'parser_url', key: 'parser_key' }
+        ];
+
+        for (var j = 0; j < fallbackMap.length; j++) {
+            var urlVal = Lampa.Storage.get(fallbackMap[j].url, '');
+            if (urlVal) {
+                var norm = normalizeHost(urlVal);
+                if (norm) {
+                    return {
+                        host: norm,
+                        key: getStorageKey(fallbackMap[j].key)
+                    };
+                }
+            }
+        }
+
+        return { host: 'http://jackettua.mooo.com', key: 'ua' };
     }
 
-    function getJackettKey() {
-        var keys = ['jackett_key', 'spawnua_key', 'parser_key', 'jacred_key'];
+    function getStorageKey(keyName) {
+        var val = Lampa.Storage.get(keyName, '');
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+            return String(val).trim();
+        }
+        return 'ua';
+    }
+
+    function getActiveKeyByHost(host) {
+        var hostLower = host.toLowerCase();
+        if (hostLower.indexOf('spawn') >= 0) return getStorageKey('spawnua_key');
+        if (hostLower.indexOf('lampaua') >= 0) return getStorageKey('lampaua_key');
+        if (hostLower.indexOf('jacred') >= 0) return getStorageKey('jacred_key');
+
+        var keys = ['jackett_key', 'spawnua_key', 'parser_key', 'jacred_key', 'lampaua_key'];
         for (var i = 0; i < keys.length; i++) {
-            var val = Lampa.Storage.get(keys[i], '');
-            if (val !== undefined && val !== null && String(val).trim() !== '') {
-                return String(val).trim();
+            var k = Lampa.Storage.get(keys[i], '');
+            if (k !== undefined && k !== null && String(k).trim() !== '') {
+                return String(k).trim();
             }
         }
         return 'ua';
@@ -114,9 +183,8 @@
      * ------------------------------------------------------------------ */
 
     function fetchJackett(query, callback) {
-        var host = getJackettHost();
-        var key = getJackettKey();
-        var url = host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(key) + '&Query=' + encodeURIComponent(query);
+        var config = getActiveParserConfig();
+        var url = config.host + '/api/v2.0/indexers/all/results?apikey=' + encodeURIComponent(config.key) + '&Query=' + encodeURIComponent(query);
 
         try {
             var req = new Lampa.Reguest();
@@ -481,9 +549,9 @@
      * ------------------------------------------------------------------ */
 
     function injectStyle() {
-        if (document.getElementById('likhtar-marks-style-v25')) return;
+        if (document.getElementById('likhtar-marks-style-v26')) return;
         var style = document.createElement('style');
-        style.id = 'likhtar-marks-style-v25';
+        style.id = 'likhtar-marks-style-v26';
         style.type = 'text/css';
         style.innerHTML = '\
             body .card__vote, body .card__rate, body div[class*="card__vote"], body div[class*="card__rate"] {\
@@ -655,6 +723,21 @@
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_fhd', type: 'trigger', default: true }, field: { name: 'Показувати мітки 1080p / 720p' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_hdr', type: 'trigger', default: false }, field: { name: 'Показувати мітку HDR / DV' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_rating', type: 'trigger', default: true }, field: { name: 'Показувати мітку рейтингу' }, onChange: function () { setTimeout(refreshAllMarks, 50); } });
+        Lampa.SettingsApi.addParam({
+            component: component,
+            param: {
+                name: 'marks_jacred_url',
+                type: 'input',
+                values: '',
+                placeholder: 'auto',
+                default: 'auto'
+            },
+            field: {
+                name: 'Джерело якості',
+                description: '«auto» — автоматично читати обраний парсер Lampa, або вкажіть URL вручну'
+            },
+            onChange: function () { clearCache(); refreshAllMarks(); }
+        });
         Lampa.SettingsApi.addParam({ component: component, param: { name: 'marks_cache_clear', type: 'button' }, field: { name: 'Очистити кеш міток', description: 'Скинути збережені дані про якість' }, onChange: function () { clearCache(); if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('Кеш очищено'); refreshAllMarks(); } });
     }
 
